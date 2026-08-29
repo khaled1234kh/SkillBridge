@@ -8,6 +8,6 @@
     "setup": "bash ./scripts/setup.sh",
     "test:backend": "bash ./scripts/test-backend.sh",
     "test:frontend": "cd frontend && npx tsc --noEmit && echo 'frontend typecheck OK'",
-    "build": "cd frontend && npm run build"
+    "build": "npm --prefix frontend install --silent && npm --prefix frontend run build"
   }
 }
