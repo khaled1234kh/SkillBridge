@@ -1,0 +1,13 @@
+{
+  "name": "skillbridge-app",
+  "version": "1.0.0",
+  "description": "SkillBridge — GenAI-powered verified career-readiness platform (FastAPI backend + React frontend)",
+  "license": "MIT",
+  "scripts": {
+    "start": "./start.sh",
+    "setup": "bash ./scripts/setup.sh",
+    "test:backend": "bash ./scripts/test-backend.sh",
+    "test:frontend": "cd frontend && npx tsc --noEmit && echo 'frontend typecheck OK'",
+    "build": "cd frontend && npm run build"
+  }
+}
