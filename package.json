@@ -4,9 +4,10 @@
   "description": "SkillBridge — GenAI-powered verified career-readiness platform (FastAPI backend + React frontend)",
   "license": "MIT",
   "scripts": {
-    "start": "./start.sh",
-    "setup": "bash ./scripts/setup.sh",
-    "test:backend": "bash ./scripts/test-backend.sh",
+    "start": "node scripts/start.mjs",
+    "start:dev": "node scripts/start.mjs --dev",
+    "setup": "node scripts/start.mjs --setup-only",
+    "test:backend": "node scripts/test-backend.mjs",
     "test:frontend": "cd frontend && npx tsc --noEmit && echo 'frontend typecheck OK'",
     "build": "npm --prefix frontend install --silent && npm --prefix frontend run build"
   }

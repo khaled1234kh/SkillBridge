@@ -2,32 +2,13 @@
 setlocal
 cd /d "%~dp0"
 
-where docker >nul 2>&1
+where node >nul 2>&1
 if errorlevel 1 (
-  echo Docker Desktop is required. Install it from https://www.docker.com/products/docker-desktop/
-  pause
-  exit /b 1
-)
-docker info >nul 2>&1
-if errorlevel 1 (
-  echo Docker Desktop is installed but is not running. Start it and try again.
+  echo Node.js is required to run SkillBridge. Install Node.js 18+ and try again.
   pause
   exit /b 1
 )
 
-echo Building and starting SkillBridge containers...
-docker compose up --build -d
-if errorlevel 1 (
-  echo.
-  echo Startup failed. The error above explains why.
-  docker compose ps
-  pause
-  exit /b 1
-)
-
-echo.
-echo SkillBridge is starting in Docker.
-echo Frontend: http://localhost:3000
-echo Backend:  http://localhost:8000
-docker compose ps
+echo Starting SkillBridge... (press Ctrl+C to stop)
+node scripts/start.mjs %*
 pause
