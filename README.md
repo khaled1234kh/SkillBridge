@@ -65,15 +65,41 @@ scripts/
 
 ## Run locally (single command)
 
+**Prerequisites:** Python 3.10+ and Node.js 18+ / npm.
+
 ```bash
-cd /home/node/skillbridge-app
+git clone https://github.com/khaled1234kh/SkillBridge.git
+cd SkillBridge
 ./start.sh
 ```
 
-Then open <http://localhost:8000>. The app builds the frontend, seeds a fresh SQLite
-database, and starts the backend (which serves both the API and the React app).
+Then open <http://localhost:8000>.
 
-- `./start.sh --reset` deletes the database so it re-seeds fresh on next boot.
+`./start.sh` does everything automatically on first run:
+
+1. Creates a local Python virtual environment (`.venv`) and installs the backend
+   dependencies from `backend/requirements.txt`.
+2. Installs the frontend dependencies and builds the React app.
+3. Creates and seeds the SQLite database (`backend/skillbridge.db`) with realistic
+   sample data — students, companies, roles, skills, and completed assessments — so
+   every screen is alive on first launch.
+4. Starts the FastAPI server, which serves both the API and the built React app.
+
+> **No cloud dependency** — the whole app runs locally with just SQLite. No account
+> signup or external setup is required to try it.
+
+Useful extras:
+
+```bash
+./start.sh --reset                  # wipe the DB so it re-seeds fresh
+SKILLBRIDGE_PORT=9000 ./start.sh    # run on a different port
+SKILLBRIDGE_URL=http://localhost:9000 ./start.sh   # custom message/URL
+ANTHROPIC_API_KEY=sk-... ./start.sh # enable live GenAI calls (or OPENAI_API_KEY)
+```
+
+Without a GenAI API key the four generation touchpoints (CV extraction, learning
+paths, AI Tutor, quiz grading) use a clear deterministic fallback so the demo still
+works end to end. With a key set, the same flows make live API calls.
 
 ### Demo accounts (password for all: `demo1234`)
 
@@ -84,6 +110,28 @@ database, and starts the backend (which serves both the API and the React app).
 | Company          | hr@northstar.com     |
 | Company          | hr@signal.com        |
 | University Admin | admin@univ.edu       |
+
+### Try the full loop (~5 minutes)
+
+1. **Company** — log in as `hr@northstar.com` → **Skills & Roles** → define a role
+   (name + required skills + proficiency levels). It persists after refresh.
+2. **Student** — log in as `aisha@student.edu` → **Skills & Roles** → **Upload CV**
+   (any `.txt` transcript listing skills works, e.g. a line like
+   `Python (Advanced), Machine Learning (Intermediate)`). GenAI extracts a
+   self-reported skill profile, visibly labelled **self-reported** (outline tag),
+   then pick **Junior AI Engineer** as your Target Career.
+3. **See the match** — back on the **Dashboard**: the Career Readiness score, the
+   Skill Gap Map (strong / gap / missing), and the My Learning Activity card.
+4. **Learn** — open a gap on the **Learning** page: explanation + curated resources
+   + roadmap, then chat with the **AI Tutor** (replies use your context).
+5. **Get Verified** — from **Assessments**, start an assessment for a gap skill and
+   answer the questions. On a pass (≥70%) the skill moves from self-reported to a
+   green **Verified** tag and the match score recalculates.
+6. **Flags** — on a fresh attempt, switch tabs mid-quiz (or paste an AI-style
+   answer): the result screen logs **Integrity flags raised** (tab switch + AI-text),
+   showing the proctoring around assessment attempts.
+7. **University** — log in as `admin@univ.edu` → **University Dashboard**: only
+   anonymized, aggregated skill-gap stats across the cohort — no individual data.
 
 ## Accounts, sign-in & verification
 
