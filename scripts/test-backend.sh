@@ -8,18 +8,18 @@ resolve_python() {
     printf '%s\n' "$PYTHON_BIN"
     return 0
   fi
-  for candidate in \
-    "/mnt/c/Users/khale/AppData/Local/Programs/Python/Python312/python.exe" \
-    "/c/Users/khale/AppData/Local/Programs/Python/Python312/python.exe" \
-    "/mnt/c/Users/khale/AppData/Local/Programs/Python/Python313/python.exe" \
-    "/c/Users/khale/AppData/Local/Programs/Python/Python313/python.exe" \
-    "/usr/bin/python3" \
-    python3 python py; do
-    if [ -n "$candidate" ] && [ -e "$candidate" ]; then
+  for candidate in python3 python py; do
+    if command -v "$candidate" >/dev/null 2>&1; then
       printf '%s\n' "$candidate"
       return 0
     fi
-    if command -v "$candidate" >/dev/null 2>&1; then
+  done
+  for candidate in \
+    "/c/Users/khale/AppData/Local/Programs/Python/Python312/python.exe" \
+    "/mnt/c/Users/khale/AppData/Local/Programs/Python/Python312/python.exe" \
+    "$USERPROFILE/AppData/Local/Programs/Python/Python312/python.exe" \
+    "/usr/bin/python3"; do
+    if [ -n "$candidate" ] && [ -e "$candidate" ]; then
       printf '%s\n' "$candidate"
       return 0
     fi

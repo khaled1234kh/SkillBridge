@@ -63,88 +63,38 @@ scripts/
   start.sh          single-command startup
 ```
 
-## Run locally
+## Run with Docker (single command)
 
-**Prerequisites:** Python 3.10+, Node.js 18+ / npm, and a Linux/WSL shell for the simplest setup.
-
-### Recommended: VS Code + WSL Ubuntu
-
-This is the most reliable path for Windows users. Open the repo folder in VS Code using **WSL: Reopen Folder in WSL** or run the commands below in an Ubuntu terminal. Paste only the commands, not the shell prompt.
+**Prerequisite:** Docker Desktop (Windows/macOS) or Docker Engine + Compose (Linux).
 
 ```bash
 git clone https://github.com/khaled1234kh/SkillBridge.git
 cd SkillBridge
-sudo apt update
-sudo apt install -y python3-venv python3-pip
-rm -rf .venv
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r backend/requirements.txt
-cd frontend
-npm install
-npm run build
-cd ..
 ./start.sh
 ```
 
-The app will choose the next available port if 8000 is already in use.
+On Windows, you can also double-click `start.bat`. Then open <http://localhost:3000>.
 
-Open the URL printed by the script, usually:
+`./start.sh` builds and starts all containers automatically:
 
-- <http://localhost:8000>
-- or a fallback port such as <http://localhost:8001>, <http://localhost:8002>, etc.
-
-To use OpenCode in the VS Code project terminal, install it once in WSL, reload the terminal, and start it from the project root:
-
-```bash
-curl -fsSL https://opencode.ai/install | bash
-source ~/.bashrc
-cd /mnt/c/Users/<your-user>/Downloads/SkillBridge-main/SkillBridge
-opencode
-```
-
-If the project is cloned in your WSL home directory, use `cd ~/SkillBridge` instead. OpenCode runs with the current project directory as its workspace. `/connect` is an OpenCode command and should be entered only after OpenCode has opened. OpenCode is a separate developer tool and is not installed by the SkillBridge setup.
-
-### Optional: VS Code Dev Container
-
-A container-based setup is possible, but the WSL workflow is the simplest and most reliable route for local development. If you still want a container, open the repo in VS Code and pick **Dev Containers: Reopen in Container**. The included `.devcontainer/devcontainer.json` helps with that workflow, but WSL is the recommended path for new users.
-
-### Mac/Linux
-
-```bash
-git clone https://github.com/khaled1234kh/SkillBridge.git
-cd SkillBridge
-python3 -m venv .venv
-. .venv/bin/activate
-python -m pip install --upgrade pip
-pip install -r backend/requirements.txt
-cd frontend
-npm install
-npm run build
-cd ..
-./start.sh
-```
-
-`./start.sh` does everything automatically on first run:
-
-1. Creates a local Python virtual environment (`.venv`) and installs the backend
-   dependencies from `backend/requirements.txt`.
-2. Installs the frontend dependencies and builds the React app.
-3. Creates and seeds the SQLite database (`backend/skillbridge.db`) with realistic
+1. Builds the backend and frontend images.
+2. Starts the backend, frontend, and database containers with health checks.
+3. Creates and seeds the SQLite database in a persistent Docker volume with realistic
    sample data — students, companies, roles, skills, and completed assessments — so
    every screen is alive on first launch.
-4. Starts the FastAPI server, which serves both the API and the built React app.
+4. Connects the frontend container to the backend container on the Compose network.
 
 > **No cloud dependency** — the whole app runs locally with just SQLite. No account
 > signup or external setup is required to try it.
 
+To run directly on the host without Docker, use `./start.sh --local` (Python 3.10+
+and Node.js 18+ / npm required). Stop the Docker stack with `docker compose down`.
+
 Useful extras:
 
 ```bash
-./start.sh --reset                  # wipe the DB so it re-seeds fresh
-SKILLBRIDGE_PORT=9000 ./start.sh    # run on a different port
-SKILLBRIDGE_URL=http://localhost:9000 ./start.sh   # custom message/URL
+./start.sh --reset                  # rebuild the stack and wipe Docker data volumes
+BACKEND_PORT=9000 ./start.sh        # expose the backend on a different port
 ANTHROPIC_API_KEY=sk-... ./start.sh # enable live GenAI calls (or OPENAI_API_KEY)
 ```
 

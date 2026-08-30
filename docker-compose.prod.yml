@@ -3,77 +3,86 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: skillbridge-backend
+      cache_from:
+        - type=registry,ref=your-registry/skillbridge-backend:latest
+    image: your-registry/skillbridge-backend:latest
+    container_name: skillbridge-backend-prod
     ports:
       - "${BACKEND_PORT:-8000}:8000"
-    volumes:
-      - ./backend/app:/app/app
-      - skillbridge_data:/app/data
-      - /app/__pycache__
     environment:
-      - SKILLBRIDGE_DB=/app/data/skillbridge.db
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DATABASE_URL=postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB}
       - PYTHONUNBUFFERED=1
     depends_on:
       db:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "python -c 'import httpx; httpx.get(\"http://localhost:8000/api/universities\", timeout=5)' || exit 1"]
-      interval: 10s
-      timeout: 5s
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
       retries: 3
-      start_period: 20s
+      start_period: 40s
     networks:
       - skillbridge
-    restart: unless-stopped
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: skillbridge-frontend
+    image: your-registry/skillbridge-frontend:latest
+    container_name: skillbridge-frontend-prod
     ports:
       - "${FRONTEND_PORT:-3000}:3000"
-    volumes:
-      - ./frontend/src:/app/src
-      - ./frontend/public:/app/public
-      - /app/node_modules
     environment:
       - VITE_API_URL=${VITE_API_URL:-http://localhost:8000}
     depends_on:
       - backend
     healthcheck:
       test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3000/"]
-      interval: 10s
-      timeout: 5s
+      interval: 30s
+      timeout: 10s
       retries: 3
-      start_period: 15s
+      start_period: 30s
     networks:
       - skillbridge
-    restart: unless-stopped
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
   db:
     image: postgres:15-alpine
-    container_name: skillbridge-db
+    container_name: skillbridge-db-prod
     environment:
       - POSTGRES_DB=${POSTGRES_DB:-skillbridge}
       - POSTGRES_USER=${POSTGRES_USER:-postgres}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-postgres}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-postgres}"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - skillbridge
-    restart: unless-stopped
+    restart: always
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
 volumes:
   postgres_data:
-    driver: local
-  skillbridge_data:
     driver: local
 
 networks:

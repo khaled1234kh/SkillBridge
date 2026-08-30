@@ -19,16 +19,3 @@ frontend/dist/
 
 # OS / editor
 .DS_Store
-.vscode/
-
-# Local handoff / scratch docs (not part of the product)
-AGENT_HANDOFF.md
-Installing
-
-# Docker experiments (not the validated working path)
-Dockerfile
-.devcontainer/
-devcontainer-lock.json
-
-# Nested duplicate checkout (never commit)
-SkillBridge/
