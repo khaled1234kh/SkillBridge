@@ -20,6 +20,30 @@ def test_learning_item_generation_shape():
     assert item["roadmap"]["summary"] and len(item["roadmap"]["steps"]) >= 3
     for s in item["roadmap"]["steps"]:
         assert s["objective"] and s["practice"]
+        # each step carries real, titled source links (not bare rank numbers)
+        assert isinstance(s.get("resources"), list) and s["resources"]
+        item_urls = {r["url"] for r in item["resources"]}
+        for r in s["resources"]:
+            assert r["url"].startswith("http") and r["title"]
+            assert r["url"] in item_urls  # step sources come from the ranked list
+        assert s["resource_ranks"] and len(s["resource_ranks"]) == len(s["resources"])
+
+
+def test_roadmap_steps_source_from_spread_resources():
+    """Steps should draw from a spread of the ranked resources, never repeat the
+    exact same source list as their neighbour, and together use the full list."""
+    item = genai.generate_learning_item("SQL", "Data", "Data Analyst",
+                                        "Studying at Aston University")
+    per_step = {tuple(r["url"] for r in s["resources"]) for s in item["roadmap"]["steps"]}
+    urls = [r["url"] for s in item["roadmap"]["steps"] for r in s["resources"]]
+    item_urls = {r["url"] for r in item["resources"]}
+    # every resource is cited somewhere in the roadmap
+    assert item_urls <= set(urls)
+    # consecutive steps never show the identical source list
+    for a, b in zip(item["roadmap"]["steps"], item["roadmap"]["steps"][1:]):
+        assert [r["url"] for r in a["resources"]] != [r["url"] for r in b["resources"]]
+    # real titled sources, not bare rank numbers
+    assert all(r["title"] for r in item["roadmap"]["steps"][0]["resources"])
 
 
 def test_learning_route_persists_item(client, student_id, auth_headers):

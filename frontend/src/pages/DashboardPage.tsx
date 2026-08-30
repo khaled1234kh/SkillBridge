@@ -1,9 +1,9 @@
 import React, { useEffect, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
-import type { Analysis, Student, RoleRecord, Candidate, RoleSkillCoverage } from '../lib/types'
+import type { Analysis, ActivitySummary, Student, RoleRecord, Candidate, RoleSkillCoverage } from '../lib/types'
 import { ScoreRing, GapPill, SkillTag, LevelBadge } from '../components/widgets'
-import { IconArrowRight, IconCompany, IconRoles, IconCheck, IconVerified } from '../components/Icons'
+import { IconArrowRight, IconCompany, IconRoles, IconCheck, IconVerified, IconFlame, IconBolt, IconLeaderboard, IconTrophy } from '../components/Icons'
 
 function nextStep(analysis: Analysis | undefined): string {
   if (!analysis) return 'Select a target role'
@@ -23,10 +23,15 @@ export default function DashboardPage() {
 }
 
 function StudentDashboard({ student, analysis }: { student?: Student; analysis?: Analysis }) {
+  const [activity, setActivity] = useState<ActivitySummary | null>(null)
+  useEffect(() => {
+    if (student) api.studentActivity(student.id).then(setActivity).catch(() => {})
+  }, [student?.id])
   if (!student) return <div className="empty">No student profile linked to this account.</div>
   const gaps = analysis?.skill_gaps || []
   const strong = gaps.filter((g) => g.status === 'strong').length
   const gapCount = gaps.filter((g) => g.status !== 'strong').length
+  const xpPct = activity ? Math.min(100, (activity.xp_into_level / activity.xp_per_level) * 100) : 0
 
   return (
     <div>
@@ -104,6 +109,42 @@ function StudentDashboard({ student, analysis }: { student?: Student; analysis?:
           {student.self_reported_skills.length === 0 && (
             <span className="muted small">Upload a CV to build your self-reported profile.</span>
           )}
+        </div>
+      </div>
+
+      <div className="activity-card card mt" style={{ marginTop: 18 }}>
+        <div className="act-head">
+          <h3 style={{ margin: 0 }}>My Learning Activity</h3>
+          <span className="act-lb">
+            Level {activity?.level ?? '–'}
+            <span className="act-level-bar"><span style={{ width: `${xpPct}%` }} /></span>
+            <span className="small muted">{activity ? `${activity.xp_into_level}/${activity.xp_per_level} XP` : ''}</span>
+          </span>
+        </div>
+        <div className="act-grid">
+          <div className="act-tile">
+            <div className="act-ico coral"><IconFlame size={20} /></div>
+            <div><strong>{activity?.streak_days ?? '–'}-day streak</strong><small className="muted">Keep a login streak going</small></div>
+          </div>
+          <div className="act-tile">
+            <div className="act-ico amber"><IconBolt size={20} /></div>
+            <div><strong>{activity?.xp ?? '–'} XP</strong><small className="muted">{activity?.active_days ?? 0} active days</small></div>
+          </div>
+          <div className="act-tile">
+            <div className="act-ico green"><IconTrophy size={20} /></div>
+            <div><strong>{activity?.verified_skills ?? 0} verified</strong><small className="muted">{activity?.assessments_taken ?? 0} assessments taken</small></div>
+          </div>
+        </div>
+        <div className="act-badges">
+          {(activity?.badges || []).filter((b) => b.earned).slice(0, 6).map((b) => (
+            <span className="badge-chip earned" key={b.code} title={b.desc}>{b.name}</span>
+          ))}
+          {(activity?.badges || []).filter((b) => !b.earned).slice(0, 3).map((b) => (
+            <span className="badge-chip locked" key={b.code} title={b.hint || b.desc}>{b.name}</span>
+          ))}
+        </div>
+        <div className="act-note small muted">
+          <IconLeaderboard size={13} /> {activity?.leaderboard?.message || 'Cohort leaderboard'}
         </div>
       </div>
     </div>

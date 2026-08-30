@@ -16,7 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 
-from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer
+from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity
 from .database import init_db, get_cursor
 
 FRONTEND_DIST = os.environ.get(
@@ -562,6 +562,13 @@ def api_student_analysis(student_id: int, request: Request):
     return analysis
 
 
+@app.get("/api/students/{student_id}/activity")
+def api_student_activity(student_id: int, request: Request):
+    user = _current_user(request)
+    _own_student(user, student_id)
+    return activity.activity_summary(student_id)
+
+
 # ------------------------------------------------------------------ learning
 
 @app.post("/api/students/{student_id}/learning/generate")
@@ -675,6 +682,15 @@ def api_submit_assessment(student_id: int, request: Request, body: dict):
 
     flags = integrity.evaluate_attempt(len(questions), total_seconds, free_text_answers, tab_switches)
 
+    # grade free-text answers as a batch (real GenAI call when a key is set,
+    # deterministic semantic-overlap heuristic otherwise)
+    ft_indexes = [i for i, q in enumerate(questions) if q and q.get("type") == "free_text"]
+    ft_pairs = [(q.get("answer") or "", str(answers[i]) if i < len(answers) else "")
+                for i, q in enumerate(questions) if i in ft_indexes]
+    ft_results = genai.grade_free_text_batch(
+        ft_pairs, skill["name"], (student.get("target_role") or {}).get("title"))
+    ft_cursor = 0
+
     # per-question results drive an objective, transparent score
     per_question = []
     correct = 0
@@ -686,9 +702,8 @@ def api_submit_assessment(student_id: int, request: Request, body: dict):
             if q.get("type") == "multiple_choice":
                 is_correct = ans.strip().lower() == model_ans.strip().lower()
             else:
-                mw = set(model_ans.lower().split())
-                aw = set(ans.lower().split())
-                is_correct = bool(mw and len(mw & aw) / len(mw) >= 0.4)
+                is_correct = bool(ft_results[ft_cursor]) if ft_cursor < len(ft_results) else False
+                ft_cursor += 1
         if is_correct:
             correct += 1
         per_question.append({"index": i, "type": q.get("type", "multiple_choice"),

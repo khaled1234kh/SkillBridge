@@ -46,7 +46,7 @@ export default function UniversityPage() {
         </div>
       )}
       <div className={`rule-banner ${ruleSatisfied ? '' : 'blocking'}`}>
-        <IconAlert size={17} style={{ color: ruleSatisfied ? 'var(--teal)' : 'var(--amber)' }} />
+        <IconAlert size={17} style={{ color: ruleSatisfied ? 'var(--coral)' : 'var(--amber)' }} />
         <div>
           <strong>Privacy &amp; minimum-cohort rule.</strong> University admins see only anonymized,
           aggregated statistics — there is no path to an individual student's data. Statistics are
@@ -132,7 +132,7 @@ export default function UniversityPage() {
             <div className="divider" />
             <div className="flex" style={{ gap: 18, color: 'var(--slate-500)', fontSize: 12.5, flexWrap: 'wrap' }}>
               <span><IconVerified size={14} style={{ color: 'var(--green)' }} /> Verified skills are counted from passed assessments only.</span>
-              <span><IconShield size={14} style={{ color: 'var(--teal)' }} /> No individual student records are revealed at any point.</span>
+              <span><IconShield size={14} style={{ color: 'var(--coral)' }} /> No individual student records are revealed at any point.</span>
             </div>
           </div>
         </div>

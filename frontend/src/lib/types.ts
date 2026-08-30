@@ -92,6 +92,29 @@ export interface SkillGap {
   verified: boolean
 }
 
+export interface BadgeInfo {
+  code: string
+  name: string
+  desc: string
+  hint?: string
+  earned: boolean
+  earned_at?: string | null
+}
+
+export interface ActivitySummary {
+  student_id: number
+  streak_days: number
+  active_days: number
+  xp: number
+  level: number
+  xp_into_level: number
+  xp_per_level: number
+  assessments_taken: number
+  verified_skills: number
+  badges: BadgeInfo[]
+  leaderboard: { status: string; message?: string }
+}
+
 export interface Analysis {
   student_id: number
   role_id: number

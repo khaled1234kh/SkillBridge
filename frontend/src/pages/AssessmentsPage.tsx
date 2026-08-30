@@ -5,6 +5,15 @@ import type { Analysis, AssessmentAttempt, IntegrityFlag, QuizQuestion } from '.
 import { GapPill } from '../components/widgets'
 import { IconAssessment, IconAlert, IconFlag, IconCheck, IconTrophy, IconClock } from '../components/Icons'
 
+function shuffle<T>(arr: T[]): T[] {
+  const a = [...arr]
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1))
+    ;[a[i], a[j]] = [a[j], a[i]]
+  }
+  return a
+}
+
 export default function AssessmentsPage() {
   const { me, refreshStudent } = useApp()
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
@@ -88,6 +97,9 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
   const [current, setCurrent] = useState(0)
   const [locked, setLocked] = useState(false)
   const [elapsed, setElapsed] = useState(0)
+  // Per-attempt shuffled option order: computed ONCE when a quiz starts, so the
+  // timer-driven re-renders never reshuffle options mid-question.
+  const [optOrder, setOptOrder] = useState<string[][] | null>(null)
   const startRef = useRef<number>(0)
 
   const start = async (practice: boolean) => {
@@ -99,6 +111,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
     setCurrent(0)
     setLocked(false)
     setElapsed(0)
+    setOptOrder(null)
     onActivate()
     try {
       const res = await api.generateAssessment(me!.student!.id, gap.skill_id, { practice })
@@ -107,6 +120,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
         setMode('practice')
       } else {
         setQuestions(res.questions)
+        setOptOrder(res.questions.map((q) => (q.type === 'multiple_choice' ? shuffle(q.options) : [])))
         setAnswers(new Array(res.questions.length).fill(''))
         startRef.current = Date.now()
         setMode('quiz')
@@ -180,7 +194,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
 
   if (mode === 'practice' && practiceData) {
     return (
-      <div className="learning-item open" style={{ border: '1.5px solid var(--teal)' }}>
+      <div className="learning-item open" style={{ border: '1.5px solid var(--coral)' }}>
         <div className="li-body" style={{ display: 'block', padding: 16 }}>
           <h4 style={{ marginBottom: 6 }}>Practice review: {gap.skill_name}</h4>
           <p className="small muted mb">
@@ -219,12 +233,13 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
     const q = questions[current]
     const isLast = current === questions.length - 1
     const chosen = answers[current] || ''
+    const order = optOrder && optOrder[current]?.length ? optOrder[current] : (q?.options || [])
     const isCorrect = q?.type === 'multiple_choice' && chosen && q.answer && chosen.trim().toLowerCase() === q.answer.trim().toLowerCase()
     const progressPct = ((current + (locked ? 1 : 0)) / questions.length) * 100
     const mm = String(Math.floor(elapsed / 60)).padStart(2, '0')
     const ss = String(elapsed % 60).padStart(2, '0')
     return (
-      <div className="learning-item open" style={{ border: '1.5px solid var(--teal)' }}>
+      <div className="learning-item open" style={{ border: '1.5px solid var(--coral)' }}>
         <div className="li-body" style={{ display: 'block', padding: 16 }}>
           <div className="quiz-top">
             <div className="quiz-progress-wrap">
@@ -246,7 +261,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
           <div className={`question-block ${locked ? 'has-feedback' : ''}`} key={current}>
             <div className="q-text">{current + 1}. {q.question}</div>
             {q.type === 'multiple_choice' ? (
-              q.options.map((opt) => {
+              order.map((opt) => {
                 let cls = 'mc-option'
                 if (locked) {
                   if (opt === q.answer) cls += ' is-answer'
@@ -301,6 +316,13 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
     return (
       <div className="learning-item open" style={{ border: `1.5px solid ${result.passed ? 'var(--green)' : 'var(--red)'}` }}>
         <div className="li-body" style={{ display: 'block', padding: 18 }}>
+          {result.passed && (
+            <div className="particle-burst" aria-hidden="true">
+              {Array.from({ length: 14 }).map((_, i) => (
+                <span key={i} className="particle" style={{ ['--angle' as any]: `${i * 25.7}deg`, animationDelay: `${i * 0.02}s` }} />
+              ))}
+            </div>
+          )}
           <div className="result-summary">
             <div className={`result-score ${result.passed ? 'pass' : 'fail'}`}>{Math.round(result.score)}%</div>
             <h4>{result.passed ? `Verified: you passed ${gap.skill_name}!` : `Not passed — keep learning ${gap.skill_name}`}</h4>

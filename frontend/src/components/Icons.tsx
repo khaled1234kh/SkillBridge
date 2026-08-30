@@ -163,8 +163,25 @@ export const IconRoadmap = (p: IconProps) => (
 )
 export const IconTrophy = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}>
-    <path d="M8 3h8v6a4 4 0 0 1-8 0V3z" />
-    <path d="M8 5H4v2a3 3 0 0 0 3 3h2M16 5h4v2a3 3 0 0 1-3 3h-2M12 13v5M9 21h6M10 17h4" />
+    <path d="M8 4h8v4a4 4 0 0 1-8 0V4z" /><path d="M8 5H4v1a3 3 0 0 0 3 3" /><path d="M16 5h4v1a3 3 0 0 1-3 3" />
+    <path d="M8 7h8" /><path d="M12 12v3" /><path d="M9 20h6M10 17h4l.5 3h-5l.5-3z" />
+  </svg>
+)
+export const IconFlame = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M12 21c4.5 0 7-2.6 7-6.2 0-2.7-1.6-4.6-3.1-6.3C17.4 10.5 15.5 12 14.5 12 14.9 9.5 13.4 6 10.5 4c.4 2-.4 3.4-1.6 5C7.7 10.6 6 12.1 6 14.9 6 18.3 8.5 21 12 21z" />
+    <path d="M12 21c-1.4 0-2.4-1-2.4-2.5 0-1.4.9-2.3 2.4-3.5 1.5 1.2 2.4 2.1 2.4 3.5 0 1.5-1 2.5-2.4 2.5z" />
+  </svg>
+)
+export const IconBolt = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M13 2L4 14h6l-1 8 9-12h-6l1-8z" />
+  </svg>
+)
+export const IconLeaderboard = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <rect x="4" y="13" width="4" height="7" rx="1" /><rect x="10" y="7" width="4" height="13" rx="1" />
+    <rect x="16" y="10" width="4" height="10" rx="1" /><path d="M6 13V8h2v5" />
   </svg>
 )
 export const IconClock = (p: IconProps) => (

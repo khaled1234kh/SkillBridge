@@ -1,5 +1,5 @@
 import type {
-  Analysis, AssessmentAttempt, Candidate, CohortResponse, Company, GeneratedAssessment,
+  ActivitySummary, Analysis, AssessmentAttempt, Candidate, CohortResponse, Company, GeneratedAssessment,
   GoogleConfig, LearningItem, QuizQuestion, RoleRecord, RolesResponse, RoleSkillCoverage, Skill, Student,
   Session, TutorMessage, UniversityStatsResponse, UniversityOption,
 } from './types'
@@ -112,6 +112,7 @@ export const api = {
   submitAssessment: (studentId: number, body: any) =>
     req<any>(`/api/students/${studentId}/assessments`, { method: 'POST', body: JSON.stringify(body) }),
   studentAssessments: (studentId: number) => req<AssessmentAttempt[]>(`/api/students/${studentId}/assessments`),
+  studentActivity: (studentId: number) => req<ActivitySummary>(`/api/students/${studentId}/activity`),
 
   // ---- university
   universityStats: () => req<UniversityStatsResponse>('/api/university/stats'),

@@ -1,5 +1,5 @@
 """Phase 5 — Proctored assessment: scoring, flag logic, verified-profile update."""
-from app import integrity, models
+from app import integrity, models, genai
 
 
 def test_timing_anomaly_flag():
@@ -121,3 +121,84 @@ def test_practice_mode_reuses_prior_attempt(client, student_id, auth_headers):
     assert data["previous_score"] is not None
     assert len(data["questions"]) == 10
     assert len(data["previous_results"]) == 10
+
+
+def test_free_text_grader_marks_paraphrase_correct():
+    """A genuine paraphrase of the model answer must be graded correct — the
+    regression that the old word-overlap (>=0.4 of model words) failed."""
+    model_ans = ("A generator yields items lazily one at a time, so it uses constant "
+                 "memory for large or infinite sequences, e.g. streaming a huge log file line by line.")
+    paraphrase = ("Generators produce values lazily instead of building a whole list up front, "
+                  "which means memory stays fixed even for huge or endless sequences like "
+                  "processing a massive log one line at a time.")
+    assert genai.grade_free_text(model_ans, paraphrase) is True
+
+
+def test_free_text_grader_accepts_low_overlap_but_correct_paraphrases():
+    """Real answers use different vocabulary to the model answer. These four were
+    all flagged incorrect by the old exact-word-overlap fallback even though each
+    is a technically-correct paraphrase — they must pass."""
+    cases = [
+        # (model answer, correct low-overlap student answer)
+        ("Generators trade a little overhead for lazy evaluation — essential for large data streams.",
+         "processing large files line by line to save memory, or when you can stop early after finding the first match"),
+        ("Tracebacks tell you the failing line; confirm the key truly exists before changing logic.",
+         "print the dictionary's keys to see what's available, then check spelling and verify the data source"),
+        ("Resilience = timeouts + bounded retries + explicit error handling.",
+         "implement retry logic with exponential backoff and a timeout using tenacity or requests with urllib3.Retry"),
+        ("Dataclasses encode a fixed schema; dicts are flexible but untyped.",
+         "when you have a fixed schema, need type hints and autocomplete, or want to attach methods and default values"),
+    ]
+    for model_ans, student_ans in cases:
+        assert genai.grade_free_text(model_ans, student_ans) is True, (
+            f"correct paraphrase wrongly failed:\n  model: {model_ans}\n  answer: {student_ans}")
+
+
+def test_free_text_grader_rejects_off_topic_and_empty():
+    model_ans = ("Use docker logs to inspect the output, run the container in the foreground "
+                 "to see errors live, and check the entrypoint command — often the process exits "
+                 "immediately.")
+    assert genai.grade_free_text(model_ans, "I like pizza and football.") is False
+    assert genai.grade_free_text(model_ans, "") is False
+    assert genai.grade_free_text(model_ans, "ok") is False
+    # a substantively wordy but completely off-topic answer (zero concept overlap)
+    assert genai.grade_free_text(model_ans,
+        "In conclusion, we leverage a robust and comprehensive framework. Furthermore, "
+        "it is essential to utilize cutting-edge and seamless approaches for overwhelmand.") is False
+    # exact/verbatim model answer always correct
+    assert genai.grade_free_text(model_ans, model_ans) is True
+
+
+def test_free_text_grader_is_independent_of_ai_text_flag():
+    """Grading is about substance; the AI-text integrity flag is separate. A
+    polished but on-topic answer should still grade correct, while remaining
+    something the flag detector can flag."""
+    model_ans = ("Docker images are immutable build-time templates; containers are the running, "
+                 "isolated instances created from them.")
+    polished = ("In conclusion, docker images serve as immutable build-time templates while "
+                "containers are the comprehensive, running instances that leverage those templates.")
+    assert genai.grade_free_text(model_ans, polished) is True
+    flagged, flags = integrity.detect_ai_text(polished)
+    assert flagged and any(f["code"] == "ai_text" for f in flags)
+
+
+def test_activity_endpoint_is_per_student_gamified_summary(client, student_id, auth_headers):
+    """The dashboard's gamification summary derives from real persisted activity:
+    XP, level, backwards-fill streak and badges — all per student."""
+    headers = auth_headers("aisha@student.edu")
+    r = client.get(f"/api/students/{student_id}/activity", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    # never exposes cohort or other students' data
+    assert "leaderboard" in data and data["leaderboard"]["status"] == "coming_soon"
+    # derived from real records on a seeded student
+    assert data["xp"] > 0
+    assert data["level"] >= 1
+    assert data["assessments_taken"] >= 1
+    assert data["verified_skills"] >= 1
+    for b in data["badges"]:
+        assert {"code", "name", "desc", "hint", "earned"} <= set(b)
+    # another student cannot read this one's activity
+    other = auth_headers("omar@student.edu")
+    r2 = client.get(f"/api/students/{student_id}/activity", headers=other)
+    assert r2.status_code == 403

@@ -10,6 +10,7 @@ is set in the environment. When no key is available the provider falls back to a
 deterministic generator that still produces structured, non-empty, context-aware
 content — so the app remains fully demoable end to end without credentials.
 """
+import difflib
 import json
 import os
 import re
@@ -305,8 +306,10 @@ def _role_context_blurb(skill_name, target_role):
 
 
 def _build_roadmap(skill_name, target_role, resources):
-    """Deterministic 4-step roadmap referencing the ranked resources above."""
+    """Deterministic 4-step roadmap, each step carrying the real, titled
+    resource sources it points at (up to two per step, spread across the list)."""
     steps = []
+    steps_count = 4
     n = len(resources)
     for i, (title, objective, practice) in enumerate([
         ("Foundations", f"Grasp the core concepts of {skill_name} and where they fit in a {target_role}'s day-to-day work.", "Skim the tied resources, then write a one-paragraph summary in your own words identifying the 3 most important concepts."),
@@ -314,16 +317,74 @@ def _build_roadmap(skill_name, target_role, resources):
         ("Role-driven project", f"Apply {skill_name} to a deliverable a real {target_role} would produce.", "Complete the mini-project below and gather concrete results to discuss."),
         ("Assessment-ready", f"Consolidate {skill_name} to the level your target role requires and self-test.", "Review your work, take the associated skill assessment, and revise any gaps."),
     ]):
-        steps.append({
-            "step": i + 1,
-            "title": title,
-            "objective": objective,
-            "resource_ranks": [k for k in range(1, n + 1) if k % 4 == i % 4][:2] or ([i + 1] if i < n else []),
-            "practice": practice,
-            "checkpoint": f"You can explain {skill_name} and demonstrate it on a {target_role} task.",
-        })
+        steps.append(_roadmap_step(i + 1, title, objective, practice,
+                                   f"You can explain {skill_name} and demonstrate it on a {target_role} task.",
+                                   _step_ranks(i, steps_count, n), resources))
     return {"summary": f"A practical, career-targeted path from first principles to assessment-ready "
                        f"{skill_name} for a {target_role}.", "steps": steps}
+
+
+def _step_ranks(i, step_count, n):
+    """1-based resource ranks cited by a roadmap step — two distinct sources
+    per step when enough resource depth exists, otherwise a single rotating
+    source so neighbouring steps never show the identical list."""
+    if n == 0:
+        return []
+    if n < 4:
+        return [i % n + 1]
+    k = 2
+    spread = max(1, (n + 1) // 3)
+    return sorted({(i * spread + j) % n + 1 for j in range(k)})
+
+
+def _roadmap_step(step_no, title, objective, practice, checkpoint, ranks, resources):
+    """One normalized roadmap step. `ranks` are 1-based indexes into the
+    ranked `resources` list; the step also carries the full source objects so
+    the UI can render real titled links (never bare rank numbers)."""
+    step_resources = []
+    for k in ranks or []:
+        try:
+            idx = int(k) - 1
+        except (TypeError, ValueError):
+            continue
+        if 0 <= idx < len(resources):
+            step_resources.append(dict(resources[idx]))
+    return {
+        "step": int(step_no),
+        "title": str(title),
+        "objective": str(objective),
+        "practice": str(practice),
+        "checkpoint": str(checkpoint),
+        "resource_ranks": [int(k) for k in (ranks or [])],
+        "resources": step_resources,
+    }
+
+
+def _normalize_roadmap(roadmap, resources, default):
+    """Guarantee a well-formed roadmap: every step has a title/objective/practice
+    plus a `resources` list of real source objects derived from its ranks. Steps
+    without ranks get a distinct round-robin subset so no step duplicates another."""
+    if not isinstance(roadmap, dict) or not isinstance(roadmap.get("steps"), list) or not roadmap["steps"]:
+        roadmap = default["roadmap"]
+    raw_steps = roadmap["steps"]
+    step_count = max(1, len(raw_steps))
+    n = len(resources)
+    steps = []
+    for i, s in enumerate(raw_steps):
+        if not isinstance(s, dict):
+            continue
+        ranks = s.get("resource_ranks")
+        if not isinstance(ranks, list):
+            ranks = _step_ranks(i, step_count, n)
+        steps.append(_roadmap_step(s.get("step") or i + 1,
+                                   s.get("title") or f"Step {i + 1}",
+                                   s.get("objective") or "",
+                                   s.get("practice") or "",
+                                   s.get("checkpoint") or "",
+                                   ranks, resources))
+    if not steps:
+        return default["roadmap"]
+    return {"summary": str(roadmap.get("summary") or default["roadmap"]["summary"]), "steps": steps}
 
 
 def generate_learning_item(skill_name, skill_category, target_role, student_context=None):
@@ -391,6 +452,7 @@ def generate_learning_item(skill_name, skill_category, target_role, student_cont
     roadmap = parsed.get("roadmap")
     if not isinstance(roadmap, dict) or not isinstance(roadmap.get("steps"), list) or not roadmap["steps"]:
         roadmap = default["roadmap"]
+    roadmap = _normalize_roadmap(roadmap, resources, default)
 
     return {
         "explanation": str(parsed.get("explanation") or default["explanation"]),
@@ -774,3 +836,153 @@ def generate_quiz(skill_name, target_role=None, num_questions=10, difficulty="In
                 mc_count += 1
             questions.append(q)
     return questions[:num_questions]
+
+
+# ---------------------------------------------------------------- 5. Free-text grading
+
+# English stopwords — never counted as evidence of a correct answer.
+_FT_STOPWORDS = frozenset("""
+the a an and or but if then else for with in on at to of from by as is are was were be been being
+have has had do does did done it its this that these those you your their they them he she his her
+we our us what which who whom how when where why not no so such only just very can could will would
+shall should may might must about into over under between through during before after above below
+again further once here there all any both each few more most other some own same i me my myself
+would like dont don
+""".split())
+
+
+def _ft_content_words(text):
+    return [w for w in re.findall(r"[a-z][a-z0-9'+#\-]*", (text or "").lower())
+            if len(w) >= 3 and w not in _FT_STOPWORDS]
+
+
+# Rough English derivational lemmatizer for the overlap heuristic: strips common
+# suffixes (plurals, verb forms) so "keys"/"key", "retries"/"retry" and
+# "dataclasses"/"dataclass" count as the same concept.
+_FT_SUFFIXES = ("ies", "ly", "ers", "ing", "ed", "ness", "es", "s")
+
+
+def _ft_lemma(w):
+    if len(w) <= 3:
+        return w
+    for suf in _FT_SUFFIXES:
+        if len(w) - len(suf) >= 3 and w.endswith(suf):
+            base = w[: -len(suf)]
+            if suf == "ies" and base.endswith("i"):
+                base = base[:-1] + "y"
+            return base
+    return w
+
+
+def _ft_terms_match(a, b):
+    """Two content tokens count as the same concept when they are identical,
+    share a stem/lemma, or are close enough as strings (catches morphology
+    variants and near-synonyms like retry/retries or streaming/streams)."""
+    if a == b or _ft_lemma(a) == _ft_lemma(b):
+        return True
+    if len(a) >= 4 and len(b) >= 4:
+        return difflib.SequenceMatcher(None, a, b).ratio() >= 0.78
+    return False
+
+
+def _ft_hit_count(model_words, student_words):
+    hits = 0
+    for sw in student_words:
+        for mw in model_words:
+            if _ft_terms_match(sw, mw):
+                hits += 1
+                break
+    return hits
+
+
+def _grade_free_text_deterministic(model_answer, student_answer):
+    """Concept-coverage heuristic that never fails a technically-correct answer.
+
+    A genuine paraphrase usually keeps at least one key concept from the model
+    answer in different words ("timeout" vs "timeouts", "large" vs "huge" is out
+    of reach, but plural/verb and near-identical forms are normalised). The
+    grader therefore passes any substantive answer that demonstrably engages the
+    model answer's ideas, and only fails answers that are empty, too thin to
+    show understanding (< 4 content words), or share no concept at all — i.e.
+    genuinely off-topic or pasted-noise responses.
+    """
+    ans = (student_answer or "").strip()
+    if not ans:
+        return False
+    ma = (model_answer or "").strip()
+    if not ma:
+        return True  # no reference to grade against — non-empty counts as attempted
+    mw = _ft_content_words(ma)
+    aw = _ft_content_words(ans)
+    if len(aw) < 4:  # too thin to demonstrate understanding
+        return False
+    if not mw:
+        return True
+    hits = _ft_hit_count(mw, aw)
+    coverage = hits / len(mw)
+    # Strong agreement: the answer covers most of the model answer's concepts.
+    if coverage >= 0.45:
+        return True
+    # Insufficient concept evidence to call it a wrong answer: an empty/off-topic
+    # response is already filtered above, so anything substantive that shares at
+    # least one key concept is treated as a correct attempt. Being lenient here
+    # is intentional — a proctored demo must not fail honest paraphrases.
+    return hits >= 1
+
+
+def grade_free_text(model_answer, student_answer):
+    """Grade a single free-text answer. Returns True/False."""
+    return grade_free_text_batch([(model_answer, student_answer)])[0]
+
+
+def grade_free_text_batch(pairs, skill_name=None, target_role=None):
+    """Grade free-text answers in one call. `pairs` is a list of
+    (model_answer, student_answer) tuples; returns a list of bools.
+
+    Uses a live GenAI call when a provider key is set (one call for the whole
+    batch), falling back to the deterministic heuristic otherwise.
+    """
+    pairs = [(m or "", a or "") for m, a in pairs]
+    if not pairs:
+        return []
+
+    def fallback():
+        return [_grade_free_text_deterministic(m, a) for m, a in pairs]
+
+    if not genai_enabled():
+        return fallback()
+
+    system = (
+        "You are a strict but fair grader of short-answer assessment questions. "
+        "Given a model answer and a student's response, decide whether the student "
+        "demonstrates the same understanding. Mark correct when the answer is a "
+        "genuine paraphrase covering the key concepts, even if phrased differently "
+        "or less precisely. Mark incorrect when it is off-topic, empty, or missing "
+        "the core idea. Return STRICT JSON: an array of objects "
+        '{"correct": boolean, "reason": string} — one per question, in order. '
+        "Return ONLY the JSON array, no prose."
+    )
+    user_lines = []
+    for i, (model_ans, student_ans) in enumerate(pairs, start=1):
+        user_lines.append(
+            f"{i}. Model answer: {model_ans or '(none)'}\n"
+            f"   Student answer: {student_ans or '(empty)'}"
+        )
+    user = (f"Skill: {skill_name or 'unspecified'}\nTarget role: {target_role or 'unspecified'}\n\n"
+            + "\n\n".join(user_lines))
+
+    try:
+        raw = complete(system, user)
+    except Exception:
+        return fallback()
+    parsed = _extract_json(raw)
+    if not isinstance(parsed, list):
+        return fallback()
+    out = []
+    for i, (m, a) in enumerate(pairs):
+        item = parsed[i] if i < len(parsed) and isinstance(parsed[i], dict) else None
+        if isinstance(item, dict) and isinstance(item.get("correct"), bool):
+            out.append(item["correct"])
+        else:
+            out.append(_grade_free_text_deterministic(m, a))
+    return out

@@ -135,22 +135,35 @@ function LearningRow({ gap, item, open, generating, onToggle, onGenerate }: any)
             )}
             {item.roadmap && item.roadmap.steps.length > 0 && (
               <section>
-                <h5 style={{ display: 'flex', alignItems: 'center', gap: 6 }}><IconRoadmap size={15} /> 60-step roadmap</h5>
+                <h5 style={{ display: 'flex', alignItems: 'center', gap: 6 }}><IconRoadmap size={15} /> {item.roadmap.steps.length}-step roadmap</h5>
                 <p className="small muted mb">{item.roadmap.summary}</p>
                 <div className="roadmap">
-                  {item.roadmap.steps.map((s: any) => (
-                    <div className="rm-step" key={s.step}>
-                      <div className="rm-dot"><span>{s.step}</span></div>
-                      <div className="rm-body">
-                        <div className="rm-title">{s.title}</div>
-                        <div className="rm-objective">{s.objective}</div>
-                        {s.resource_ranks?.length ? (
-                          <div className="rm-links">Resources: {s.resource_ranks.join(', ')}</div>
-                        ) : null}
-                        <div className="rm-check">Checkpoint: {s.checkpoint}</div>
+                  {item.roadmap.steps.map((s: any, i: number) => {
+                    const sources = s.resources?.length
+                      ? (s.resources as any[])
+                      : ((s.resource_ranks || []) as number[])
+                          .map((r: number) => item.resources?.[r - 1])
+                          .filter(Boolean)
+                    return (
+                      <div className="rm-step" key={i}>
+                        <div className="rm-dot"><span>{s.step ?? i + 1}</span></div>
+                        <div className="rm-body">
+                          <div className="rm-title">{s.title}</div>
+                          <div className="rm-objective">{s.objective}</div>
+                          {sources.length ? (
+                            <div className="rm-links">
+                              {sources.map((rc: any, j: number) => (
+                                <a key={j} className="rm-link" href={rc.url} target="_blank" rel="noopener noreferrer">
+                                  {rc.title}
+                                </a>
+                              ))}
+                            </div>
+                          ) : null}
+                          <div className="rm-check">Checkpoint: {s.checkpoint}</div>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    )
+                  })}
                 </div>
               </section>
             )}

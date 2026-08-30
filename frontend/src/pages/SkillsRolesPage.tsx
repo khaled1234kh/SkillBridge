@@ -38,7 +38,7 @@ function RoleCard({ r, selected, onSelect, selectable, dest }: {
   r: RoleRecord; selected?: boolean; onSelect?: () => void; selectable?: boolean; dest?: string
 }) {
   return (
-    <div className="role-card" style={selected ? { border: '1.5px solid var(--teal)' } : undefined}>
+    <div className="role-card" style={selected ? { border: '1.5px solid var(--coral)' } : undefined}>
       <div className="rc-head">
         <div>
           <div className="rc-title">{r.title} {dest === 'catalog' && <span className="chip chip-catalog">Catalog</span>}</div>
@@ -89,7 +89,7 @@ function StudentBrowse({ student }: { student?: Student }) {
     setCvMsg('')
     try {
       const res = await api.uploadCv(student.id, file)
-      setCvMsg(`Extracted ${res.extracted.length} skills from "${file.name}".${res.genai_provider === 'real' ? '' : ' (deterministic fallback — set a GenAI API key for live extraction)'}`)
+      setCvMsg(`Extracted ${res.extracted.length} skills from "${file.name}". These are shown as self-reported until verified by an assessment.`)
       await refreshStudent()
     } catch (e: any) {
       setCvMsg('Upload failed: ' + e.message)

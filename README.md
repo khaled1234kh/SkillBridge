@@ -10,6 +10,23 @@ Skill Profile** updates so their match to real roles improves.
 This is a focused prototype demonstrating the full loop end to end — extraction, personalized
 generation, and verified re-assessment — not a production platform.
 
+## Screenshots
+
+From the running app as all three roles — Student, Company, and University Admin.
+
+| | |
+|---|---|
+| **Sign in** | **Student dashboard** |
+| ![Sign in](docs/screenshots/01-login.png) | ![Student dashboard](docs/screenshots/02-student-dashboard.png) |
+| **Learning activity — streak, XP & badges** | **Skills & Roles — choosing a Target Career** |
+| ![Learning activity](docs/screenshots/03-student-activity.png) | ![Skills & Roles](docs/screenshots/04-skills-and-roles-student.png) |
+| **Company — defining a Role** | **Learning path — explanation + roadmap sources** |
+| ![Company roles](docs/screenshots/05-company-roles.png) | ![Learning path](docs/screenshots/06-learning.png) |
+| **AI Tutor chat** | **Assessment — pass moves a skill to Verified** |
+| ![AI Tutor](docs/screenshots/07-ai-tutor.png) | ![Assessment pass](docs/screenshots/08-assessment-pass.png) |
+| **Assessment — integrity flags raised** | **University dashboard — anonymized stats** |
+| ![Integrity flags](docs/screenshots/09-assessment-flag.png) | ![University dashboard](docs/screenshots/10-university-dashboard.png) |
+
 ## Stack
 
 - **Backend:** FastAPI (Python) + SQLite (stdlib `sqlite3`), no cloud dependency.
@@ -23,23 +40,27 @@ generation, and verified re-assessment — not a production platform.
 backend/
   app/
     main.py        FastAPI app + all routes + SPA static serving + university stats
-    database.py    SQLite schema + shared connection
+    database.py    SQLite schema + migration + shared connection
     models.py      data layer (CRUD + learning/tutor/assessment/verified helpers)
     matching.py    skill-gap + job match engine
     integrity.py   proctoring flag heuristics (tab-switch, timing, AI-text detection)
     genai.py       the four GenAI touchpoints (live call + deterministic fallback)
-    seed.py        realistic sample data
+    auth.py        password hashing, session/reset tokens, Google OAuth client
+    mailer.py      SMTP email delivery (verification + password reset)
+    resources.py   curated learning resources for learning-path items
+    seed.py        realistic sample data + country -> university reference list
   tests/           unit tests (CRUD, matching, extraction, learning, assessment, university)
 frontend/
   src/
     pages/         Login, Dashboard, Skills & Roles, Learning, Assessments, University
     lib/           api client + types
     components/    icons + UI widgets
+    AppContext.tsx auth/session state shared across the app
 scripts/
   setup.sh          one-time env setup (idempotent)
   test-backend.sh   run all backend unit tests
   verify.sh         run an end-to-end API verification against a fresh server
-start.sh            single-command startup
+  start.sh          single-command startup
 ```
 
 ## Run locally (single command)
@@ -64,18 +85,52 @@ database, and starts the backend (which serves both the API and the React app).
 | Company          | hr@signal.com        |
 | University Admin | admin@univ.edu       |
 
-## GenAI configuration
+## Accounts, sign-in & verification
 
-The four GenAI touchpoints (CV skill extraction, learning-path generation, AI Tutor chat,
-quiz generation + AI-text detection) call a real provider when a key is set:
+- **Create an account** from the login page as a Student, Company, or University Admin.
+  Student and University Admin signup uses a cascading **country → university** dropdown fed
+  from a seeded reference list (a university not listed can be typed in via "Other").
+- **Google sign-in** uses real OAuth credentials when `SKILLBRIDGE_GOOGLE_CLIENT_ID` /
+  `SKILLBRIDGE_GOOGLE_CLIENT_SECRET` are set. Without them a clearly-labelled demo Google
+  provider stands in so the flow stays demoable.
+- **Email verification:** when SMTP is configured, local accounts start unverified and a
+  verification email is sent; clicking the emailed link (`/verify?token=…`) activates the
+  account. When SMTP is absent (demo) accounts start verified so the app stays demoable, but
+  the verification flow remains available.
+- **Password reset** requests email a reset link (or show the token in demo mode).
+
+## Configuration
+
+All configuration is via environment variables — no secrets are committed.
+
+**GenAI** — the four touchpoints call a real provider when a key is set, and fall back to a
+clear deterministic generator otherwise:
 
 ```bash
 export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY=...
-./start.sh
 ```
 
-Without a key, the app uses a clear, deterministic fallback so every feature still works for
-a local demo. The fallback output is visibly deterministic but the integration is real.
+**Google sign-in** (optional, else the demo provider is used):
+
+```bash
+export SKILLBRIDGE_GOOGLE_CLIENT_ID=...
+export SKILLBRIDGE_GOOGLE_CLIENT_SECRET=...
+```
+
+**Email / SMTP** (optional, else verification links are logged instead of sent):
+
+```bash
+export SMTP_HOST=smtp.example.com
+export SMTP_PORT=587
+export SMTP_USER=you@example.com
+export SMTP_PASS=your-app-password
+export SMTP_FROM=you@example.com          # optional, defaults to SMTP_USER
+export SKILLBRIDGE_APP_URL=http://localhost:8000   # base URL used in emailed links
+export SKILLBRIDGE_EMAIL_DISABLED=0       # set 1 to force demo/log mode even if SMTP is set
+```
+
+Emails are delivered on a background task, so a slow or unreachable SMTP host never blocks or
+freezes the create-account / password-reset request.
 
 ## Tests
 
