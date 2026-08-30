@@ -8,6 +8,31 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+resolve_venv_python() {
+  local venv_dir="${1:-.venv}"
+  local candidate=""
+  for candidate in \
+    "$venv_dir/Scripts/python.exe" \
+    "$venv_dir/Scripts/python" \
+    "$venv_dir/bin/python" \
+    "$venv_dir/bin/python3"; do
+    if [ -x "$candidate" ]; then
+      if [ "${candidate#/}" = "$candidate" ]; then
+        candidate="$PWD/$candidate"
+      fi
+      printf '%s\n' "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+VENV_DIR="${VENV_DIR:-.venv}"
+VENV_PY="$(resolve_venv_python "$VENV_DIR")" || {
+  echo "Virtual environment is incomplete." >&2
+  exit 1
+}
+
 API="http://127.0.0.1:8000/api"
 TMP=$(mktemp -d)
 FAILURES=0
@@ -17,7 +42,7 @@ _run_server() {
   sleep 1
   cd backend
   rm -f skillbridge.db
-  SKILLBRIDGE_DB="$PWD/skillbridge.db" ../.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/sb-server.log 2>&1 &
+  SKILLBRIDGE_DB="$PWD/skillbridge.db" "$VENV_PY" -m uvicorn app.main:app --host 127.0.0.1 --port 8000 > /tmp/sb-server.log 2>&1 &
   SERVER_PID=$!
   cd ..
   for i in $(seq 1 60); do

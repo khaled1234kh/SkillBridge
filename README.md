@@ -67,13 +67,36 @@ scripts/
 
 **Prerequisites:** Python 3.10+ and Node.js 18+ / npm.
 
+### Windows (recommended: Git Bash)
+
+```bash
+git clone https://github.com/khaled1234kh/SkillBridge.git
+cd SkillBridge
+bash ./start.sh
+```
+
+If you already have a nested copy of the repo, remove the extra folder before cloning again:
+
+```powershell
+Remove-Item -Recurse -Force "C:\Users\<your-user>\Downloads\SkillBridge-main\SkillBridge\SkillBridge"
+```
+
+Then run the commands above from the real repo root.
+
+### Mac/Linux
+
 ```bash
 git clone https://github.com/khaled1234kh/SkillBridge.git
 cd SkillBridge
 ./start.sh
 ```
 
-Then open <http://localhost:8000>.
+The app will start automatically and choose the next available port if 8000 is already in use.
+
+Open the URL printed by the script, usually:
+
+- <http://localhost:8000>
+- or a fallback port such as <http://localhost:8001>, <http://localhost:8002>, etc.
 
 `./start.sh` does everything automatically on first run:
 
