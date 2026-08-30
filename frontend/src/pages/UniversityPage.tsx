@@ -1,99 +1,142 @@
 import React, { useEffect, useState } from 'react'
 import { api } from '../lib/api'
-import type { UniversityStatsResponse } from '../lib/types'
-import { IconUniversity, IconAlert, IconCheck, IconVerified } from '../components/Icons'
+import { useApp } from '../AppContext'
+import type { UniversityStatsResponse, CohortResponse } from '../lib/types'
+import { IconUniversity, IconAlert, IconCheck, IconVerified, IconShield } from '../components/Icons'
 
 export default function UniversityPage() {
+  const { me } = useApp()
   const [data, setData] = useState<UniversityStatsResponse | null>(null)
+  const [cohort, setCohort] = useState<CohortResponse | null>(null)
   const [error, setError] = useState('')
+  const [confirming, setConfirming] = useState(false)
 
-  useEffect(() => {
+  const load = () => {
     api.universityStats().then(setData).catch((e) => setError(e.message))
-  }, [])
+    api.universityCohort().then(setCohort).catch(() => {})
+  }
+  useEffect(load, [])
+
+  const confirm = async () => {
+    setConfirming(true)
+    try {
+      const r = await api.universityConfirm()
+      setCohort(r)
+      load()
+    } catch (e: any) {
+      setError(e.message)
+    } finally {
+      setConfirming(false)
+    }
+  }
 
   if (error) return <div className="card"><div className="error">{error}</div></div>
-  if (!data) return <div className="card"><div className="loading">Loading aggregated statistics…</div></div>
+  if (!data || !cohort) return <div className="card"><div className="loading">Loading aggregated statistics…</div></div>
 
-  const ruleSatisfied = data.rule?.satisfied
+  const rule = data.rule
+  const ruleSatisfied = rule?.satisfied
+  const institution = me?.university || ''
 
   return (
     <div>
-      <div className="rule-banner">
-        <IconAlert size={17} style={{ color: 'var(--teal)' }} />
+      {institution && (
+        <div className="institution-banner">
+          <IconUniversity size={16} />
+          <span><strong>{institution}</strong>{me?.country ? ` · ${me.country}` : ''}</span>
+        </div>
+      )}
+      <div className={`rule-banner ${ruleSatisfied ? '' : 'blocking'}`}>
+        <IconAlert size={17} style={{ color: ruleSatisfied ? 'var(--teal)' : 'var(--amber)' }} />
         <div>
           <strong>Privacy &amp; minimum-cohort rule.</strong> University admins see only anonymized,
           aggregated statistics — there is no path to an individual student's data. Statistics are
-          only computed when the cohort has at least{' '}
-          <strong>{data.rule?.min_cohort_size} students</strong>. Current cohort: {data.rule?.student_count}.
+          only computed once at least <strong>{rule?.min_cohort_size} students</strong> have consented
+          to join the cohort. Consented now: {rule?.confirmed_count ?? cohort.confirmed_count} of {rule?.student_count ?? cohort.student_count}.
         </div>
       </div>
 
-      <div className="stats-grid">
-        <div className="stat-card">
-          <span className="label">Students in Cohort</span>
-          <strong>{data.student_count ?? data.rule?.student_count ?? '–'}</strong>
-          <small>{data.with_target_role ?? 0} with a target role</small>
+      {!ruleSatisfied ? (
+        <div className="card confirm-card">
+          <div className="confirm-icon"><IconUniversity size={26} /></div>
+          <h3>Cohort consent not yet reached</h3>
+          <p>
+            SkillBridge aggregates skill-gap statistics across each student cohort. To keep every
+            number trustworthy and anonymous, at least <strong>{rule?.min_cohort_size} students</strong> must
+            have consented before the dashboard unlocks.
+          </p>
+          <p className="muted small">
+            {cohort.confirmed_count} of {cohort.student_count} students have consented&nbsp;·
+            &nbsp;<code>MIN_COHORT_SIZE = {rule?.min_cohort_size}</code> — this rule is enforced in the backend
+            endpoint, not just hidden in the UI.
+          </p>
+          <button className="btn btn-primary" onClick={confirm} disabled={confirming}>
+            <IconCheck size={15} /> {confirming ? 'Confirming…' : 'Consent the cohort — unlock stats'}
+          </button>
         </div>
-        <div className="stat-card">
-          <span className="label">Average Match Score</span>
-          <strong>{data.average_match_score != null ? Math.round(data.average_match_score) : '–'}%</strong>
-          <small>Across the cohort</small>
-        </div>
-        <div className="stat-card">
-          <span className="label">Verified Skills Earned</span>
-          <strong>{data.verified_skills_total ?? 0}</strong>
-          <small>{data.assessments_total ?? 0} assessment attempts logged</small>
-        </div>
-      </div>
-
-      <div className="card">
-        <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-          <IconUniversity size={18} /> Recommended skill gaps across the cohort
-        </h3>
-        <p className="card-sub">Share of students who need improvement in each required skill (gap or missing).</p>
-        {!ruleSatisfied ? (
-          <div className="empty">
-            Statistics hidden — cohort is below the minimum size of {data.rule?.min_cohort_size} students.
+      ) : (
+        <div>
+          <div className="stats-grid">
+            <div className="stat-card">
+              <span className="label">Students in Cohort</span>
+              <strong>{data.student_count ?? rule?.student_count ?? '–'}</strong>
+              <small>{data.with_target_role ?? 0} with a target role</small>
+            </div>
+            <div className="stat-card">
+              <span className="label">Average Match Score</span>
+              <strong>{data.average_match_score != null ? Math.round(data.average_match_score) : '–'}%</strong>
+              <small>Across the cohort</small>
+            </div>
+            <div className="stat-card">
+              <span className="label">Verified Skills Earned</span>
+              <strong>{data.verified_skills_total ?? 0}</strong>
+              <small>{data.assessments_total ?? 0} assessment attempts logged</small>
+            </div>
           </div>
-        ) : (
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Skill</th>
-                <th>Category</th>
-                <th>Strong</th>
-                <th>Gap</th>
-                <th>Missing</th>
-                <th>Need improvement</th>
-              </tr>
-            </thead>
-            <tbody>
-              {(data.skill_stats || []).map((s) => (
-                <tr key={s.skill_name}>
-                  <td style={{ fontWeight: 600 }}>{s.skill_name}</td>
-                  <td className="muted">{s.category}</td>
-                  <td>{s.strong}</td>
-                  <td>{s.gap}</td>
-                  <td>{s.missing}</td>
-                  <td>
-                    <div className="flex">
-                      <div className="bar-wrap">
-                        <div className="bar-fill" style={{ width: `${s.need_improvement_pct}%` }} />
-                      </div>
-                      <span className="small" style={{ minWidth: 48 }}>{s.need_improvement_pct}%</span>
-                    </div>
-                  </td>
+
+          <div className="card">
+            <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <IconUniversity size={18} /> Recommended skill gaps across the cohort
+            </h3>
+            <p className="card-sub">Share of students who need improvement in each required skill (gap or missing).</p>
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Skill</th>
+                  <th>Category</th>
+                  <th>Strong</th>
+                  <th>Gap</th>
+                  <th>Missing</th>
+                  <th>Need improvement</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-        <div className="divider" />
-        <div className="flex" style={{ gap: 18, color: 'var(--slate-500)', fontSize: 12.5, flexWrap: 'wrap' }}>
-          <span><IconVerified size={14} style={{ color: 'var(--teal)' }} /> Verified skills are counted from passed assessments only.</span>
-          <span>No individual student records are revealed at any point.</span>
+              </thead>
+              <tbody>
+                {(data.skill_stats || []).map((s) => (
+                  <tr key={s.skill_name}>
+                    <td style={{ fontWeight: 600 }}>{s.skill_name}</td>
+                    <td className="muted">{s.category}</td>
+                    <td>{s.strong}</td>
+                    <td>{s.gap}</td>
+                    <td>{s.missing}</td>
+                    <td>
+                      <div className="flex">
+                        <div className="bar-wrap">
+                          <div className="bar-fill" style={{ width: `${s.need_improvement_pct}%` }} />
+                        </div>
+                        <span className="small" style={{ minWidth: 48 }}>{s.need_improvement_pct}%</span>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            <div className="divider" />
+            <div className="flex" style={{ gap: 18, color: 'var(--slate-500)', fontSize: 12.5, flexWrap: 'wrap' }}>
+              <span><IconVerified size={14} style={{ color: 'var(--green)' }} /> Verified skills are counted from passed assessments only.</span>
+              <span><IconShield size={14} style={{ color: 'var(--teal)' }} /> No individual student records are revealed at any point.</span>
+            </div>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

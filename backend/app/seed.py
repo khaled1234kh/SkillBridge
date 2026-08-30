@@ -1,24 +1,25 @@
 """Seed the database with realistic sample data so the app looks alive on first launch.
 
-Creates users for all three roles, several students, 2-3 companies with defined roles,
-a shared skill list, self-reported skill profiles, a few completed assessment attempts,
-and pre-generated learning content.
+Creates users for all three roles, several students, companies with defined roles,
+a shared skill list, self-reported skill profiles, a curated reference "talent
+catalog" of realistic roles, a few completed assessment attempts, and
+pre-generated learning content.
 """
 from . import models, genai, matching
 from .database import init_db, get_cursor
 
 USERS = [
-    # (email, password, role, display_name)
-    ("aisha@student.edu", "demo1234", "Student", "Aisha Rahman"),
-    ("omar@student.edu", "demo1234", "Student", "Omar Haddad"),
-    ("leila@student.edu", "demo1234", "Student", "Leila Chen"),
-    ("marcus@student.edu", "demo1234", "Student", "Marcus Torres"),
-    ("priya@student.edu", "demo1234", "Student", "Priya Nair"),
-    ("sara@student.edu", "demo1234", "Student", "Sara Kovač"),
-    ("tomas@student.edu", "demo1234", "Student", "Tomas Lindqvist"),
-    ("hr@northstar.com", "demo1234", "Company", "Northstar Labs"),
-    ("hr@signal.com", "demo1234", "Company", "Signal Works"),
-    ("admin@univ.edu", "demo1234", "University Admin", "University Analytics"),
+    # (email, role, display_name, password)
+    ("aisha@student.edu", "Student", "Aisha Rahman", "demo1234"),
+    ("omar@student.edu", "Student", "Omar Haddad", "demo1234"),
+    ("leila@student.edu", "Student", "Leila Chen", "demo1234"),
+    ("marcus@student.edu", "Student", "Marcus Torres", "demo1234"),
+    ("priya@student.edu", "Student", "Priya Nair", "demo1234"),
+    ("sara@student.edu", "Student", "Sara Kovač", "demo1234"),
+    ("tomas@student.edu", "Student", "Tomas Lindqvist", "demo1234"),
+    ("hr@northstar.com", "Company", "Northstar Labs", "demo1234"),
+    ("hr@signal.com", "Company", "Signal Works", "demo1234"),
+    ("admin@univ.edu", "University Admin", "University Analytics", "demo1234"),
 ]
 
 STUDENTS = [
@@ -54,25 +55,71 @@ VERIFIED = {
     "leila@student.edu": [("SQL", "Advanced"), ("Excel", "Advanced")],
 }
 
-ROLES = [
-    ("company-northstar", "Junior AI Engineer",
+# Internal company-defined roles (companies manage these themselves).
+INTERNAL_ROLES = [
+    ("hr@northstar.com", "Junior AI Engineer",
      "Build and deploy ML models and pipelines for real product features.",
      [("Python", "Advanced", "Programming"), ("Machine Learning", "Intermediate", "AI"),
       ("Docker", "Intermediate", "DevOps"), ("SQL", "Advanced", "Data")],
      "role-ai"),
-    ("company-northstar", "Data Engineer",
+    ("hr@northstar.com", "Data Engineer",
      "Own the data pipelines and infrastructure that power analytics.",
      [("Python", "Advanced", "Programming"), ("SQL", "Advanced", "Data"),
       ("Docker", "Intermediate", "DevOps"), ("Git", "Intermediate", "DevOps")],
      "role-dataeng"),
-    ("company-signal", "Data Analyst",
+    ("hr@signal.com", "Data Analyst",
      "Turn raw data into insight and dashboards that drive decisions.",
      [("SQL", "Advanced", "Data"), ("Excel", "Advanced", "Analytics"),
       ("Python", "Intermediate", "Programming"), ("Tableau", "Intermediate", "Visualization")],
      "role-data"),
 ]
 
-# Completed assessment attempts for richer seed data: (student_email, skill_name, score, passed, level_before, level_after, flags_count)
+# Reference catalog roles (read-only baseline from the SkillBridge Talent Catalog).
+# Complete 8-14 skill lists per track so students get realistic, substantial gaps.
+CATALOG_ROLES = [
+    ("Junior AI Engineer",
+     "Build, deploy, and maintain machine-learning features end to end.",
+     [("Python", "Advanced", "Programming"), ("Machine Learning", "Intermediate", "AI"),
+      ("Deep Learning", "Beginner", "AI"), ("SQL", "Advanced", "Data"),
+      ("Statistics", "Intermediate", "Data"), ("Pandas", "Intermediate", "Data"),
+      ("scikit-learn", "Intermediate", "AI"), ("Docker", "Intermediate", "DevOps"),
+      ("Git", "Intermediate", "DevOps"), ("REST APIs", "Intermediate", "DevOps"),
+      ("Communication", "Beginner", "Soft Skills"), ("Teamwork", "Beginner", "Soft Skills")]),
+    ("Data Engineer",
+     "Design and operate the pipelines, storage, and infrastructure behind analytics.",
+     [("Python", "Advanced", "Programming"), ("SQL", "Advanced", "Data"),
+      ("Docker", "Intermediate", "DevOps"), ("Data Engineering", "Intermediate", "Data"),
+      ("ETL", "Intermediate", "Data"), ("Airflow", "Beginner", "Data"),
+      ("Spark", "Beginner", "Data"), ("Cloud Security", "Beginner", "Security"),
+      ("Git", "Intermediate", "DevOps"), ("CI/CD", "Intermediate", "DevOps"),
+      ("Communication", "Beginner", "Soft Skills"), ("Problem Solving", "Intermediate", "Soft Skills")]),
+    ("Data Analyst",
+     "Transform raw data into decisions, dashboards, and stories for stakeholders.",
+     [("SQL", "Advanced", "Data"), ("Excel", "Advanced", "Analytics"),
+      ("Python", "Intermediate", "Programming"), ("Pandas", "Intermediate", "Data"),
+      ("Tableau", "Intermediate", "Visualization"), ("Data Visualization", "Intermediate", "Visualization"),
+      ("Statistics", "Intermediate", "Data"), ("Data Analysis", "Intermediate", "Data"),
+      ("Data Storytelling", "Beginner", "Analytics"), ("Business Intelligence", "Beginner", "Analytics"),
+      ("Communication", "Intermediate", "Soft Skills"), ("Critical Thinking", "Intermediate", "Soft Skills")]),
+    ("Cloud Security Engineer",
+     "Secure cloud workloads and respond to threats across the infrastructure.",
+     [("Cybersecurity", "Intermediate", "Security"), ("Cloud Security", "Intermediate", "Security"),
+      ("AWS", "Intermediate", "DevOps"), ("Linux", "Intermediate", "DevOps"),
+      ("Network Security", "Intermediate", "Security"), ("Threat Detection", "Beginner", "Security"),
+      ("Incident Response", "Beginner", "Security"), ("Vulnerability Management", "Intermediate", "Security"),
+      ("Risk Assessment", "Intermediate", "Security"), ("Python", "Beginner", "Programming"),
+      ("Communication", "Intermediate", "Soft Skills"), ("Critical Thinking", "Advanced", "Soft Skills")]),
+    ("Financial Data Analyst",
+     "Analyze financial data and build models that inform investment decisions.",
+     [("Excel", "Advanced", "Analytics"), ("SQL", "Advanced", "Data"),
+      ("Statistics", "Advanced", "Data"), ("Python", "Intermediate", "Programming"),
+      ("Pandas", "Intermediate", "Data"), ("Data Visualization", "Intermediate", "Visualization"),
+      ("Power BI", "Intermediate", "Visualization"), ("Business Intelligence", "Intermediate", "Analytics"),
+      ("Risk Assessment", "Intermediate", "Security"), ("A/B Testing", "Intermediate", "Analytics"),
+      ("Communication", "Intermediate", "Soft Skills"), ("Time Management", "Beginner", "Soft Skills")]),
+]
+
+# Completed assessment attempts for richer seed data.
 ATTEMPTS = [
     ("aisha@student.edu", "Python", 92, True, "Advanced", "Advanced", 0),
     ("aisha@student.edu", "SQL", 88, True, "Advanced", "Advanced", 0),
@@ -80,6 +127,31 @@ ATTEMPTS = [
     ("leila@student.edu", "Excel", 84, True, "Advanced", "Advanced", 0),
     ("sara@student.edu", "Python", 95, True, "Advanced", "Advanced", 1),
     ("omar@student.edu", "Python", 45, False, "Intermediate", "Intermediate", 1),
+]
+
+
+UNIVERSITIES = [
+    # ("Country", ["universities", ...])
+    ("United Kingdom", ["Aston University", "University of Birmingham", "Imperial College London",
+                        "University of Oxford", "University of Cambridge", "University of Manchester",
+                        "King's College London", "University of Edinburgh"]),
+    ("United States", ["Arizona State University", "Georgia Institute of Technology", "MIT",
+                       "Stanford University", "University of California, Berkeley", "Carnegie Mellon University",
+                       "University of Texas at Austin", "University of Washington"]),
+    ("United Arab Emirates", ["Khalifa University", "American University of Sharjah", "United Arab Emirates University",
+                             "University of Sharjah", "Zayed University", "Abu Dhabi University"]),
+    ("Saudi Arabia", ["King Fahd University of Petroleum and Minerals", "King Abdulaziz University",
+                      "King Saud University", "KAUST", "Prince Sultan University", "Effat University"]),
+    ("Egypt", ["Cairo University", "Ain Shams University", "Alexandria University", "Nile University",
+               "American University in Cairo", "German University in Cairo", "Future University in Egypt",
+               "Helwan University", "Misr International University"]),
+    ("India", ["Indian Institute of Technology (IIT), Bombay", "Indian Institute of Technology (IIT), Delhi",
+               "Birla Institute of Technology and Science (BITS) Pilani", "VIT Vellore",
+               "National Institute of Technology (NIT) Trichy", "Delhi University"]),
+    ("Germany", ["Technical University of Munich", "RWTH Aachen", "University of Stuttgart",
+                 "KIT Karlsruhe", "LMU Munich", "Humboldt University of Berlin"]),
+    ("Canada", ["University of Toronto", "University of Waterloo", "University of British Columbia",
+                "McGill University", "University of Alberta", "Simon Fraser University"]),
 ]
 
 
@@ -97,55 +169,75 @@ def _sample_cv(name, email, university, skills):
     return "\n".join(lines)
 
 
+def _category(name):
+    return genai.FALLBACK_SKILL_CATEGORIES.get(name, "General")
+
+
 def seed():
     init_db()
     with get_cursor() as c:
         c.executescript("""
-            DELETE FROM assessment_attempts; DELETE FROM tutor_messages;
+            DELETE FROM google_registrations; DELETE FROM password_resets;
+            DELETE FROM email_verifications;
+            DELETE FROM sessions; DELETE FROM assessment_attempts; DELETE FROM tutor_messages;
             DELETE FROM learning_path_items; DELETE FROM verified_skills;
             DELETE FROM self_reported_skills; DELETE FROM role_skills;
             DELETE FROM roles; DELETE FROM students; DELETE FROM companies;
             DELETE FROM skills; DELETE FROM users;
         """)
 
-    # companies + users
+    # users (password hashed via the new create_user signature).
+    # Seed/demo accounts are pre-verified so the app works on first launch.
+    for email, role, display, password in USERS:
+        models.create_user(email, role, display, password=password, verified=1)
+
+    # reference country + university list (used by the cascading signup dropdown)
+    with get_cursor() as c:
+        c.execute("DELETE FROM universities")
+    for country, unis in UNIVERSITIES:
+        for uni in unis:
+            models.add_university(country, uni)
+
+    # companies
     company_ids = {}
-    for email, pw, role, display in USERS:
-        models.create_user(email, pw, role, display)
     companies = [
         ("hr@northstar.com", "Northstar Labs", "AI / Software"),
         ("hr@signal.com", "Signal Works", "Data & Analytics"),
+        ("catalog@skillbridge.io", "SkillBridge Talent Catalog", "Reference"),
     ]
     for email, name, industry in companies:
-        u = models.get_user_by_email(email)
+        u = (models.get_user_by_email(email) if not email.startswith("catalog")
+             else {"id": None})
         comp = models.create_company(name, industry, user_id=u["id"])
         company_ids[email] = comp["id"]
 
-    # roles
+    # internal roles
     role_ids = {}
-    company_email_map = {
-        "company-northstar": "hr@northstar.com",
-        "company-signal": "hr@signal.com",
-    }
-    for company_key, title, desc, skills, key in ROLES:
-        cid = company_ids[company_email_map[company_key]]
-        role = models.create_role(cid, title, [
+    for email, title, desc, skills, key in INTERNAL_ROLES:
+        role = models.create_role(company_ids[email], title, [
             {"name": n, "level": lvl, "category": cat} for (n, lvl, cat) in skills
         ], description=desc)
         role_ids[key] = role["id"]
 
-    # students
+    # reference catalog roles
+    catalog_company_id = company_ids["catalog@skillbridge.io"]
+    for title, desc, skills in CATALOG_ROLES:
+        models.create_role(catalog_company_id, title, [
+            {"name": n, "level": lvl, "category": cat} for (n, lvl, cat) in skills
+        ], description=desc, is_reference=1)
+
+    # students (with cohort confirmed for the university view)
     student_ids = {}
     for email, name, uni, role_key in STUDENTS:
         u = models.get_user_by_email(email)
         sid = models.create_student(name, email, uni, user_id=u["id"])["id"]
-        models.update_student(sid, target_role_id=role_ids[role_key])
+        models.update_student(sid, target_role_id=role_ids[role_key], cohort_confirmed=1)
         student_ids[email] = sid
 
     # self-reported + verified skills
     for email, skills in SELF_REPORTED.items():
         models.replace_self_reported_skills(student_ids[email], [
-            {"name": n, "level": lvl, "category": genai.FALLBACK_SKILL_CATEGORIES.get(n, "General")}
+            {"name": n, "level": lvl, "category": _category(n)}
             for (n, lvl) in skills
         ])
     for email, skills in VERIFIED.items():
@@ -193,7 +285,8 @@ def _pregen_learning(sid):
     for g in gaps:
         item = genai.generate_learning_item(g["skill_name"], g.get("category"), role["title"], ctx)
         models.upsert_learning_item(sid, g["skill_id"], item["explanation"],
-                                    item["practice_exercise"], item["mini_project"])
+                                    item["practice_exercise"], item["mini_project"],
+                                    item.get("resources") or [], item.get("roadmap") or None)
 
 
 if __name__ == "__main__":

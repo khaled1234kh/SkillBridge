@@ -5,8 +5,15 @@ import pytest
 from app import database, models, seed
 
 
+def _admin_headers(client):
+    r = client.post("/api/auth/login", json={"email": "admin@univ.edu", "password": "demo1234"})
+    assert r.status_code == 200
+    return {"Authorization": f"Bearer {r.json()['token']}"}
+
+
 def test_university_stats_are_aggregated(client):
-    r = client.get("/api/university/stats")
+    headers = _admin_headers(client)
+    r = client.get("/api/university/stats", headers=headers)
     assert r.status_code == 200
     data = r.json()
     assert data["rule"]["satisfied"] is True
@@ -31,7 +38,8 @@ def test_min_cohort_rule_hides_stats():
         # Startup may seed the shared DB; delete students *after* startup, in-context.
         conn.execute("DELETE FROM students")
         conn.commit()
-        r = c.get("/api/university/stats")
+        headers = _admin_headers(c)
+        r = c.get("/api/university/stats", headers=headers)
     assert r.status_code == 200
     data = r.json()
     assert data["rule"]["satisfied"] is False
@@ -43,7 +51,28 @@ def test_min_cohort_rule_hides_stats():
 def test_university_never_drills_into_individual(client):
     # Verify no student-specific detail endpoint is exposed from the university view —
     # /api/university/stats returns only the shape above.
-    r = client.get("/api/university/stats")
+    headers = _admin_headers(client)
+    r = client.get("/api/university/stats", headers=headers)
     data = r.json()
     assert "students" not in data
     assert "student" not in data
+
+
+def test_non_admin_cannot_read_university_stats(client, auth_headers):
+    headers = auth_headers("aisha@student.edu")
+    assert client.get("/api/university/stats", headers=headers).status_code == 403
+
+
+def test_cohort_endpoint_is_anonymized(client):
+    headers = _admin_headers(client)
+    r = client.get("/api/university/cohort", headers=headers)
+    assert r.status_code == 200
+    data = r.json()
+    assert data["student_count"] >= 5 and data["confirmed_count"] >= 5
+    blob = str(data)
+    # never exposes names or emails
+    assert "@" not in blob
+    assert "aisha" not in blob.lower()
+    # every entry is just an index + confirmation status
+    for s in data["students"]:
+        assert set(s.keys()) == {"index", "confirmed"}

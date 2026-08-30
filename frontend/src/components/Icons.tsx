@@ -136,3 +136,39 @@ export const IconSearch = (p: IconProps) => (
     <circle cx="11" cy="11" r="7" /><path d="M21 21l-4.3-4.3" />
   </svg>
 )
+export const IconGoogle = (p: IconProps) => (
+  <svg width={p.size || 18} height={p.size || 18} viewBox="0 0 24 24" fill="none" className={p.className} style={p.style} aria-hidden>
+    <path d="M21.35 12.2c0-.7-.06-1.4-.18-2H12v3.8h5.3c-.2 1.2-.9 2.3-1.9 3v2.5h3c1.8-1.7 2.95-4.2 2.95-7.3z" fill="#4285F4" />
+    <path d="M12 22c2.55 0 4.7-.85 6.3-2.3l-3-2.5c-.85.55-1.9.9-3.3.9-2.5 0-4.65-1.7-5.4-4H3.56v2.55C5.15 20.2 8.35 22 12 22z" fill="#34A853" />
+    <path d="M6.6 14.1c-.2-.55-.3-1.15-.3-1.75s.1-1.2.3-1.75V8.05H3.56C3.2 8.7 3 9.55 3 10.35s.2 1.65.56 2.3L6.6 14.1z" fill="#FBBC05" />
+    <path d="M12 5.9c1.4 0 2.65.48 3.65 1.4l2.7-2.7C16.75 3.05 14.6 2 12 2 8.35 2 5.15 3.8 3.56 8.05l3.04 2.3c.75-2.3 2.9-4.45 5.4-4.45z" fill="#EA4335" />
+  </svg>
+)
+export const IconShield = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M12 2l8 3v6c0 5-3.5 8.5-8 11-4.5-2.5-8-6-8-11V5l8-3z" />
+    <path d="M8.5 12l2.5 2.5L15.5 9.5" />
+  </svg>
+)
+export const IconExternal = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M14 4h6v6" /><path d="M20 4l-9 9" /><path d="M19 13v6a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h6" />
+  </svg>
+)
+export const IconRoadmap = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <circle cx="5" cy="6" r="2" /><circle cx="5" cy="18" r="2" />
+    <path d="M7 6h14M7 18h10" /><circle cx="19" cy="6" r="1.4" fill="currentColor" stroke="none" />
+  </svg>
+)
+export const IconTrophy = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M8 3h8v6a4 4 0 0 1-8 0V3z" />
+    <path d="M8 5H4v2a3 3 0 0 0 3 3h2M16 5h4v2a3 3 0 0 1-3 3h-2M12 13v5M9 21h6M10 17h4" />
+  </svg>
+)
+export const IconClock = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
+  </svg>
+)

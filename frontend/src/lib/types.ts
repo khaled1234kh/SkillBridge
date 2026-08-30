@@ -1,12 +1,26 @@
 export type Role = 'Student' | 'Company' | 'University Admin'
 
 export interface Session {
+  token: string
   id: number
   email: string
   role: Role
   display_name: string
+  auth_provider: string
   entity_type: 'student' | 'company' | 'university'
-  entity_id: number | null
+  verified?: boolean
+  country?: string
+  university?: string
+  student?: Student
+  company?: Company
+  roles?: RoleRecord[]
+  analysis?: Analysis | null
+  learning?: LearningItem[]
+}
+
+export interface UniversityOption {
+  country: string
+  universities: string[]
 }
 
 export interface Skill {
@@ -29,6 +43,14 @@ export interface RoleRecord {
   description?: string
   company_name?: string
   required_skills: RequiredSkill[]
+  is_reference?: number
+}
+
+export interface RolesResponse {
+  roles: RoleRecord[]
+  catalog: RoleRecord[]
+  is_company: boolean
+  company_id: number | null
 }
 
 export interface SelfReportedSkill {
@@ -55,6 +77,7 @@ export interface Student {
   target_role_id: number | null
   target_role?: RoleRecord
   cv_filename?: string | null
+  cohort_confirmed?: number
   self_reported_skills: SelfReportedSkill[]
   verified_skills: VerifiedSkill[]
 }
@@ -79,6 +102,29 @@ export interface Analysis {
   gap_count: number
 }
 
+export interface LearningResource {
+  rank?: number
+  type: string
+  title: string
+  url: string
+  source?: string
+  helpfulness?: string
+}
+
+export interface RoadmapStep {
+  step: number
+  title: string
+  objective: string
+  resource_ranks: number[]
+  practice: string
+  checkpoint: string
+}
+
+export interface Roadmap {
+  summary: string
+  steps: RoadmapStep[]
+}
+
 export interface LearningItem {
   id: number
   skill_id: number
@@ -87,6 +133,8 @@ export interface LearningItem {
   explanation: string
   practice_exercise: string
   mini_project: string
+  resources: LearningResource[] | null
+  roadmap: Roadmap | null
   generated_at: string
 }
 
@@ -103,6 +151,7 @@ export interface QuizQuestion {
   type: 'multiple_choice' | 'free_text'
   options: string[]
   answer: string
+  explanation: string
 }
 
 export interface IntegrityFlag {
@@ -127,6 +176,32 @@ export interface AssessmentAttempt {
   created_at: string
 }
 
+export interface GeneratedAssessment {
+  skill: Skill
+  questions: QuizQuestion[]
+  practice: boolean
+  previous_results: PerQuestionResult[] | null
+  previous_score: number | null
+  previous_passed: boolean | null
+}
+
+export interface PerQuestionResult {
+  index: number
+  type: string
+  correct: boolean
+  answer: string
+}
+
+export interface AssessmentResult {
+  score: number
+  passed: boolean
+  flags: IntegrityFlag[]
+  per_question: PerQuestionResult[]
+  level_before: string
+  level_after: string
+  analysis: Analysis | null
+}
+
 export interface UniversityStat {
   skill_name: string
   category: string
@@ -138,7 +213,7 @@ export interface UniversityStat {
 }
 
 export interface UniversityStatsResponse {
-  rule: { min_cohort_size: number; satisfied: boolean; student_count: number }
+  rule: { min_cohort_size: number; satisfied: boolean; student_count: number; confirmed_count?: number }
   student_count?: number
   with_target_role?: number
   average_match_score?: number
@@ -148,8 +223,49 @@ export interface UniversityStatsResponse {
   message?: string
 }
 
+export interface CohortResponse {
+  student_count: number
+  confirmed_count: number
+  min_cohort_size: number
+  students: { index: number; confirmed: boolean }[]
+}
+
 export interface Company {
   id: number
   name: string
   industry: string
+}
+
+export interface Candidate {
+  student_id: number
+  name: string
+  email: string
+  university: string
+  match_score: number
+  gap_count: number
+  verified_count: number
+}
+
+export interface SkillCoverageRow {
+  skill_id: number
+  skill_name: string
+  category?: string
+  required_level: string
+  strong: number
+  gap: number
+  missing: number
+  coverage_pct: number
+  n_candidates: number
+}
+
+export interface RoleSkillCoverage {
+  role_id: number
+  role_title: string
+  candidate_count: number
+  skills: SkillCoverageRow[]
+}
+
+export interface GoogleConfig {
+  configured: boolean
+  demo: boolean
 }

@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
-import type { Analysis, Student, RoleRecord } from '../lib/types'
+import type { Analysis, Student, RoleRecord, Candidate, RoleSkillCoverage } from '../lib/types'
 import { ScoreRing, GapPill, SkillTag, LevelBadge } from '../components/widgets'
 import { IconArrowRight, IconCompany, IconRoles, IconCheck, IconVerified } from '../components/Icons'
 
@@ -17,7 +17,7 @@ function nextStep(analysis: Analysis | undefined): string {
 export default function DashboardPage() {
   const { me } = useApp()
   if (!me) return null
-  if (me.entity_type === 'student') return <StudentDashboard student={me.student} analysis={me.analysis} />
+  if (me.entity_type === 'student') return <StudentDashboard student={me.student} analysis={me.analysis ?? undefined} />
   if (me.entity_type === 'company') return <CompanyDashboard />
   return <UniversityDashboard />
 }
@@ -113,24 +113,22 @@ function StudentDashboard({ student, analysis }: { student?: Student; analysis?:
 function CompanyDashboard() {
   const { me } = useApp()
   const [roles, setRoles] = useState<RoleRecord[]>([])
-  const [students, setStudents] = useState<Student[]>([])
-  const [analysis, setAnalysis] = useState<Record<number, Analysis>>({})
+  const [candidates, setCandidates] = useState<Record<number, Candidate[]>>({})
+  const [coverage, setCoverage] = useState<Record<number, RoleSkillCoverage>>({})
 
   useEffect(() => {
-    api.roles().then(setRoles)
-    api.students().then(setStudents)
+    api.roles().then((res) => setRoles(res.roles)).catch(() => {})
   }, [])
 
   useEffect(() => {
-    students.forEach((s) => {
-      if (s.target_role_id) {
-        api.analysis(s.id).then((a) => setAnalysis((prev) => ({ ...prev, [s.id]: a }))).catch(() => {})
-      }
+    roles.forEach((r) => {
+      api.candidates(r.id).then((c) => setCandidates((prev) => ({ ...prev, [r.id]: c }))).catch(() => {})
+      api.roleSkillCoverage(r.id).then((c) => setCoverage((prev) => ({ ...prev, [r.id]: c }))).catch(() => {})
     })
-  }, [students])
+  }, [roles])
 
-  const roleCount = (roleId: number) =>
-    students.filter((s) => s.target_role_id === roleId && (analysis[s.id]?.match_score ?? 0) >= 60).length
+  const pool = Object.values(candidates).flat()
+  const atLeast60 = pool.filter((c) => c.match_score >= 60).length
 
   return (
     <div>
@@ -142,33 +140,82 @@ function CompanyDashboard() {
         </div>
         <div className="stat-card">
           <span className="label">Candidate Pool</span>
-          <strong>{students.length}</strong>
-          <small>Students in the cohort</small>
+          <strong>{pool.length}</strong>
+          <small>{atLeast60} at ≥60% match</small>
+        </div>
+        <div className="stat-card">
+          <span className="label">Verified Skills Earned</span>
+          <strong>{pool.reduce((s, c) => s + c.verified_count, 0)}</strong>
+          <small>Across matched candidates</small>
         </div>
       </div>
       <div className="card">
         <h3>Your roles &amp; matching candidates</h3>
         {roles.length === 0 && <div className="empty">Define a role on the Skills &amp; Roles page to start matching.</div>}
-        {roles.map((r) => (
-          <div className="role-card" key={r.id} style={{ marginBottom: 10 }}>
-            <div className="rc-head">
-              <div>
-                <div className="rc-title">{r.title}</div>
-                <div className="rc-company">{r.company_name}</div>
+        {roles.map((r) => {
+          const list = candidates[r.id] || []
+          const cov = coverage[r.id]
+          const weakest = (cov?.skills || []).filter((s) => s.coverage_pct < 100).sort((a, b) => a.coverage_pct - b.coverage_pct)
+          return (
+            <div className="role-card" key={r.id} style={{ marginBottom: 10 }}>
+              <div className="rc-head">
+                <div>
+                  <div className="rc-title">{r.title}</div>
+                  <div className="rc-company">{r.company_name}</div>
+                </div>
+                <span className="muted small" style={{ marginTop: 2 }}>
+                  {list.length} candidate{list.length === 1 ? '' : 's'} matched
+                </span>
               </div>
-              <span className="muted small" style={{ marginTop: 2 }}>
-                {roleCount(r.id)} candidate{roleCount(r.id) === 1 ? '' : 's'} at ≥60% match
-              </span>
+              {cov && (
+                <div className="coverage-block">
+                  <div className="coverage-head">
+                    <span className="small muted">Applicant skill coverage</span>
+                    <span className="small muted">{cov.candidate_count} candidate{cov.candidate_count === 1 ? '' : 's'} · {weakest.length} skill{weakest.length === 1 ? '' : 's'} short</span>
+                  </div>
+                  {cov.skills.map((s) => (
+                    <div className="cov-row" key={s.skill_id}>
+                      <div className="cov-label">{s.skill_name} <span className="lv">{s.required_level}</span></div>
+                      <div className="cov-track">
+                        <div className="cov-fill" style={{ width: `${s.coverage_pct}%`, background: s.coverage_pct >= 60 ? 'var(--green)' : s.coverage_pct >= 30 ? 'var(--amber)' : 'var(--red)' }} />
+                      </div>
+                      <div className="cov-pct">{Math.round(s.coverage_pct)}%</div>
+                      <div className="cov-tally small muted">
+                        {s.strong} strong · {s.gap} gap · {s.missing} missing
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {list.length > 0 && (
+                <div className="cand-list">
+                  {list.map((c) => (
+                    <div className="cand" key={c.student_id}>
+                      <div>
+                        <div className="cand-name">{c.name}</div>
+                        <div className="cand-mail">{c.university}</div>
+                      </div>
+                      <div className="cand-right">
+                        <span className="muted small">{c.verified_count} verified · {c.gap_count} gaps</span>
+                        <ScoreInline value={c.match_score} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
-              {r.required_skills.map((s) => (
-                <span className="skill-tag" key={s.skill_id}>{s.name} <span className="lv">{s.required_level}</span></span>
-              ))}
-            </div>
-          </div>
-        ))}
+          )
+        })}
       </div>
     </div>
+  )
+}
+
+function ScoreInline({ value }: { value: number }) {
+  return (
+    <span className="score-chip" style={{ color: value >= 60 ? 'var(--green)' : value >= 40 ? 'var(--amber)' : 'var(--red)' }}>
+      {Math.round(value)}%
+    </span>
   )
 }
 

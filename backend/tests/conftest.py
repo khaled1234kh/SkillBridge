@@ -29,14 +29,27 @@ def client(db):
 
 
 @pytest.fixture()
-def auth_headers(client):
-    def login(email, password="demo1234"):
-        r = client.post("/api/login", json={"email": email, "password": password})
+def login(client):
+    def do(email, password="demo1234"):
+        r = client.post("/api/auth/login", json={"email": email, "password": password})
+        assert r.status_code == 200, r.text
         return r.json()
-    return login
+    return do
 
 
 @pytest.fixture()
-def student_id(auth_headers):
-    s = auth_headers("aisha@student.edu")
-    return s["entity_id"]
+def auth_headers(login):
+    def h(email, password="demo1234"):
+        payload = login(email, password)
+        return {"Authorization": f"Bearer {payload['token']}"}
+    return h
+
+
+@pytest.fixture()
+def student_payload(login):
+    return login("aisha@student.edu")
+
+
+@pytest.fixture()
+def student_id(student_payload):
+    return student_payload["student"]["id"]

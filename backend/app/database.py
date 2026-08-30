@@ -56,7 +56,52 @@ CREATE TABLE IF NOT EXISTS users (
     email TEXT UNIQUE NOT NULL,
     password TEXT NOT NULL,
     role TEXT NOT NULL CHECK(role IN ('Student','Company','University Admin')),
-    display_name TEXT NOT NULL
+    display_name TEXT NOT NULL,
+    password_hash TEXT,
+    password_salt TEXT,
+    auth_provider TEXT NOT NULL DEFAULT 'local',
+    google_sub TEXT,
+    verified INTEGER NOT NULL DEFAULT 0,
+    country TEXT,
+    university TEXT
+);
+
+CREATE TABLE IF NOT EXISTS sessions (
+    token TEXT PRIMARY KEY,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS password_resets (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT UNIQUE NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS google_registrations (
+    google_sub TEXT PRIMARY KEY,
+    email TEXT UNIQUE NOT NULL,
+    display_name TEXT NOT NULL,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS universities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    country TEXT NOT NULL,
+    name TEXT NOT NULL,
+    UNIQUE(country, name)
+);
+
+CREATE TABLE IF NOT EXISTS email_verifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    token TEXT UNIQUE NOT NULL,
+    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+    expires_at TEXT NOT NULL,
+    used INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
 CREATE TABLE IF NOT EXISTS students (
@@ -66,7 +111,8 @@ CREATE TABLE IF NOT EXISTS students (
     email TEXT UNIQUE NOT NULL,
     university TEXT NOT NULL,
     target_role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL,
-    cv_filename TEXT
+    cv_filename TEXT,
+    cohort_confirmed INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS companies (
@@ -86,7 +132,8 @@ CREATE TABLE IF NOT EXISTS roles (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     company_id INTEGER REFERENCES companies(id) ON DELETE CASCADE,
     title TEXT NOT NULL,
-    description TEXT
+    description TEXT,
+    is_reference INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS role_skills (
@@ -122,6 +169,8 @@ CREATE TABLE IF NOT EXISTS learning_path_items (
     explanation TEXT,
     practice_exercise TEXT,
     mini_project TEXT,
+    resources TEXT,
+    roadmap TEXT,
     generated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(student_id, skill_id)
 );
@@ -144,6 +193,7 @@ CREATE TABLE IF NOT EXISTS assessment_attempts (
     score REAL NOT NULL,
     passed INTEGER NOT NULL DEFAULT 0,
     flags TEXT NOT NULL DEFAULT '[]',
+    per_question TEXT,
     level_before TEXT NOT NULL,
     level_after TEXT NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
@@ -151,6 +201,32 @@ CREATE TABLE IF NOT EXISTS assessment_attempts (
 """
 
 
+def _migrate():
+    """Lightweight in-place migration so databases created before an iteration
+    keep working: add any columns that the current schema introduced."""
+    additions = [
+        ("users", "password_hash", "TEXT"),
+        ("users", "password_salt", "TEXT"),
+        ("users", "auth_provider", "TEXT NOT NULL DEFAULT 'local'"),
+        ("users", "google_sub", "TEXT"),
+        ("users", "verified", "INTEGER NOT NULL DEFAULT 0"),
+        ("users", "country", "TEXT"),
+        ("users", "university", "TEXT"),
+        ("students", "cohort_confirmed", "INTEGER NOT NULL DEFAULT 0"),
+        ("roles", "is_reference", "INTEGER NOT NULL DEFAULT 0"),
+        ("learning_path_items", "resources", "TEXT"),
+        ("learning_path_items", "roadmap", "TEXT"),
+        ("assessment_attempts", "per_question", "TEXT"),
+    ]
+    conn = _connect()
+    for table, column, ddl in additions:
+        cols = [r["name"] for r in conn.execute(f"PRAGMA table_info({table})").fetchall()]
+        if column not in cols:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+    conn.commit()
+
+
 def init_db():
     with get_cursor() as conn:
         conn.executescript(SCHEMA)
+    _migrate()

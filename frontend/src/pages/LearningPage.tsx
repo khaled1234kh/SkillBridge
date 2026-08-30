@@ -1,13 +1,14 @@
 import React, { useEffect, useRef, useState } from 'react'
+import Markdown from 'react-markdown'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import type { Analysis, LearningItem, TutorMessage } from '../lib/types'
 import { GapPill } from '../components/widgets'
-import { IconChevron, IconChat, IconSend, IconAssessment } from './LearningIcons'
+import { IconChevron, IconChat, IconSend, IconAssessment, IconExternal, IconRoadmap } from '../components/Icons'
 
 export default function LearningPage() {
-  const { me } = useApp()
-  const [studentId] = useState<number>(me?.student?.id ?? 0)
+  const { me, refreshStudent } = useApp()
+  const studentId = me?.student?.id ?? 0
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [items, setItems] = useState<LearningItem[]>([])
   const [openId, setOpenId] = useState<number | null>(null)
@@ -18,7 +19,7 @@ export default function LearningPage() {
       const [a, l] = await Promise.all([api.analysis(studentId), api.learning(studentId)])
       setAnalysis(a)
       setItems(l)
-    } catch (e) {
+    } catch {
       setItems([])
     }
   }
@@ -33,6 +34,8 @@ export default function LearningPage() {
         return [...rest, item]
       })
       if (openId !== skillId) setOpenId(skillId)
+      await refreshStudent()
+      await load()
     } finally {
       setGenerating(null)
     }
@@ -101,9 +104,56 @@ function LearningRow({ gap, item, open, generating, onToggle, onGenerate }: any)
           </div>
         ) : (
           <>
-            <section><h5>Explanation</h5><p>{item.explanation}</p></section>
-            <section><h5>Practice exercise</h5><p>{item.practice_exercise}</p></section>
-            <section><h5>Mini-project</h5><p>{item.mini_project}</p></section>
+            <section>
+              <h5>Explanation</h5>
+              <div className="md-body"><Markdown>{item.explanation}</Markdown></div>
+            </section>
+            <section>
+              <h5>Practice exercise</h5>
+              <div className="md-body"><Markdown>{item.practice_exercise}</Markdown></div>
+            </section>
+            <section>
+              <h5>Mini-project</h5>
+              <div className="md-body"><Markdown>{item.mini_project}</Markdown></div>
+            </section>
+            {item.resources && item.resources.length > 0 && (
+              <section>
+                <h5>Curated resources</h5>
+                <div className="resource-list">
+                  {item.resources.map((r: any, i: number) => (
+                    <a key={i} className="resource" href={r.url} target="_blank" rel="noopener noreferrer">
+                      <span className="resource-rank">{r.rank ?? i + 1}</span>
+                      <span className="resource-main">
+                        <span className="resource-title">{r.title}</span>
+                        <span className="resource-meta">{r.type}{r.source ? ` · ${r.source}` : ''}{r.helpfulness ? ` · ${r.helpfulness}` : ''}</span>
+                      </span>
+                      <IconExternal size={15} />
+                    </a>
+                  ))}
+                </div>
+              </section>
+            )}
+            {item.roadmap && item.roadmap.steps.length > 0 && (
+              <section>
+                <h5 style={{ display: 'flex', alignItems: 'center', gap: 6 }}><IconRoadmap size={15} /> 60-step roadmap</h5>
+                <p className="small muted mb">{item.roadmap.summary}</p>
+                <div className="roadmap">
+                  {item.roadmap.steps.map((s: any) => (
+                    <div className="rm-step" key={s.step}>
+                      <div className="rm-dot"><span>{s.step}</span></div>
+                      <div className="rm-body">
+                        <div className="rm-title">{s.title}</div>
+                        <div className="rm-objective">{s.objective}</div>
+                        {s.resource_ranks?.length ? (
+                          <div className="rm-links">Resources: {s.resource_ranks.join(', ')}</div>
+                        ) : null}
+                        <div className="rm-check">Checkpoint: {s.checkpoint}</div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            )}
           </>
         )}
       </div>
@@ -151,7 +201,7 @@ function TutorPanel({ studentId, analysis, items }: { studentId: number; analysi
       <p className="card-sub">Context-aware coaching — it knows your background, current gap, and target role.</p>
       <div className="tutor-layout">
         <div className="tutor-skill-list">
-          <button className="ts-item" onClick={() => setSkillId(null)}>General</button>
+          <button className={`ts-item ${skillId === null ? 'active' : ''}`} onClick={() => setSkillId(null)}>General</button>
           {skillOptions.map((g: any) => (
             <button
               key={g.skill_id ?? g.id}
@@ -168,12 +218,12 @@ function TutorPanel({ studentId, analysis, items }: { studentId: number; analysi
           </div>
           <div className="tutor-messages" ref={scrollRef}>
             {messages.length === 0 && (
-              <div className="muted small">
+              <div className="muted small" style={{ padding: 8 }}>
                 Ask a question about your path. For example: "How should I approach learning Docker for an AI Engineer role?"
               </div>
             )}
             {messages.map((m) => (
-              <div key={m.id} className={`msg ${m.role}`}>{m.content}</div>
+              <div key={m.id} className={`msg ${m.role}`}><div className="md-body"><Markdown>{m.content}</Markdown></div></div>
             ))}
             {busy && <div className="msg assistant">…</div>}
           </div>

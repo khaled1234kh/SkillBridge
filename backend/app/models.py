@@ -21,6 +21,23 @@ def list_skills():
         return [_row(r) for r in rows]
 
 
+def _json_loads(value):
+    if not value:
+        return None
+    import json
+    try:
+        return json.loads(value)
+    except Exception:
+        return None
+
+
+def _json_dumps(value):
+    if value is None:
+        return None
+    import json
+    return json.dumps(value)
+
+
 def get_skill(skill_id):
     with get_cursor() as c:
         return _row(c.execute("SELECT * FROM skills WHERE id=?", (skill_id,)).fetchone())
@@ -96,11 +113,27 @@ def delete_company(company_id):
 
 # ---------------------------------------------------------------- roles
 
-def list_roles():
+def list_roles(company_id=None):
     with get_cursor() as c:
-        rows = c.execute("""SELECT r.*, c.name AS company_name
-                            FROM roles r JOIN companies c ON c.id=r.company_id
-                            ORDER BY r.title""").fetchall()
+        q = """SELECT r.*, c.name AS company_name
+               FROM roles r JOIN companies c ON c.id=r.company_id"""
+        if company_id is not None:
+            q += " WHERE r.company_id=?"
+        q += " ORDER BY r.title"
+        rows = c.execute(q, (company_id,) if company_id is not None else ()).fetchall()
+        out = []
+        for r in rows:
+            rd = _row(r)
+            rd["required_skills"] = role_skills(c, r["id"])
+            out.append(rd)
+        return out
+
+
+def list_catalog_roles():
+    """Reference roles seeded as the talent catalog (read-only baseline)."""
+    with get_cursor() as c:
+        rows = c.execute("SELECT r.*, c.name AS company_name FROM roles r "
+                         "JOIN companies c ON c.id=r.company_id WHERE r.is_reference=1 ORDER BY r.title").fetchall()
         out = []
         for r in rows:
             rd = _row(r)
@@ -139,11 +172,11 @@ def get_roles_by_company(company_id):
         return out
 
 
-def create_role(company_id, title, required_skills, description=None):
+def create_role(company_id, title, required_skills, description=None, is_reference=0):
     """required_skills: list of {name, category, level}."""
     with get_cursor() as c:
-        cur = c.execute("INSERT INTO roles (company_id, title, description) VALUES (?,?,?)",
-                        (company_id, title, description))
+        cur = c.execute("INSERT INTO roles (company_id, title, description, is_reference) VALUES (?,?,?,?)",
+                        (company_id, title, description, int(is_reference)))
         role_id = cur.lastrowid
         for rs in required_skills:
             sk = get_or_create_skill(rs["name"], rs.get("category", "General"))
@@ -232,7 +265,7 @@ def create_student(name, email, university, user_id=None):
 
 
 def update_student(student_id, **fields):
-    allowed = {"name", "email", "university", "target_role_id", "cv_filename"}
+    allowed = {"name", "email", "university", "target_role_id", "cv_filename", "cohort_confirmed"}
     sets, vals = [], []
     for k, v in fields.items():
         if k in allowed and v is not None:
@@ -276,32 +309,49 @@ def update_verified_skill(student_id, skill_id, level):
 
 def list_learning_path(student_id):
     with get_cursor() as c:
-        return [_row(r) for r in c.execute("""
+        rows = c.execute("""
             SELECT l.id, l.student_id, l.skill_id, s.name AS skill_name, s.category,
-                   l.explanation, l.practice_exercise, l.mini_project, l.generated_at
+                   l.explanation, l.practice_exercise, l.mini_project, l.resources, l.roadmap, l.generated_at
             FROM learning_path_items l JOIN skills s ON s.id=l.skill_id
-            WHERE l.student_id=? ORDER BY s.name""", (student_id,)).fetchall()]
+            WHERE l.student_id=? ORDER BY s.name""", (student_id,)).fetchall()
+        out = []
+        for r in rows:
+            d = _row(r)
+            d["resources"] = _json_loads(d.get("resources"))
+            d["roadmap"] = _json_loads(d.get("roadmap"))
+            out.append(d)
+        return out
 
 
 def get_learning_item(student_id, skill_id):
     with get_cursor() as c:
-        return _row(c.execute("""
+        r = c.execute("""
             SELECT l.id, l.student_id, l.skill_id, s.name AS skill_name, s.category,
-                   l.explanation, l.practice_exercise, l.mini_project, l.generated_at
+                   l.explanation, l.practice_exercise, l.mini_project, l.resources, l.roadmap, l.generated_at
             FROM learning_path_items l JOIN skills s ON s.id=l.skill_id
-            WHERE l.student_id=? AND l.skill_id=?""", (student_id, skill_id)).fetchone())
+            WHERE l.student_id=? AND l.skill_id=?""", (student_id, skill_id)).fetchone()
+        if not r:
+            return None
+        d = _row(r)
+        d["resources"] = _json_loads(d.get("resources"))
+        d["roadmap"] = _json_loads(d.get("roadmap"))
+        return d
 
 
-def upsert_learning_item(student_id, skill_id, explanation, practice_exercise, mini_project):
+def upsert_learning_item(student_id, skill_id, explanation, practice_exercise, mini_project,
+                         resources=None, roadmap=None):
     with get_cursor() as c:
-        c.execute("""INSERT INTO learning_path_items (student_id, skill_id, explanation, practice_exercise, mini_project)
-                     VALUES (?,?,?,?,?)
+        c.execute("""INSERT INTO learning_path_items (student_id, skill_id, explanation, practice_exercise, mini_project, resources, roadmap)
+                     VALUES (?,?,?,?,?,?,?)
                      ON CONFLICT(student_id, skill_id) DO UPDATE SET
                        explanation=excluded.explanation,
                        practice_exercise=excluded.practice_exercise,
                        mini_project=excluded.mini_project,
+                       resources=excluded.resources,
+                       roadmap=excluded.roadmap,
                        generated_at=datetime('now')""",
-                  (student_id, skill_id, explanation, practice_exercise, mini_project))
+                  (student_id, skill_id, explanation, practice_exercise, mini_project,
+                   _json_dumps(resources), _json_dumps(roadmap)))
         return get_learning_item(student_id, skill_id)
 
 
@@ -327,13 +377,13 @@ def list_tutor_messages(student_id, skill_id=None):
 # ---------------------------------------------------------------- assessments
 
 def create_assessment_attempt(student_id, skill_id, questions, answers, score, passed,
-                              flags, level_before, level_after):
+                              flags, level_before, level_after, per_question=None):
     with get_cursor() as c:
         cur = c.execute("""INSERT INTO assessment_attempts
-                           (student_id, skill_id, questions, answers, score, passed, flags, level_before, level_after)
-                           VALUES (?,?,?,?,?,?,?,?,?)""",
+                           (student_id, skill_id, questions, answers, score, passed, flags, per_question, level_before, level_after)
+                           VALUES (?,?,?,?,?,?,?,?,?,?)""",
                         (student_id, skill_id, questions, answers, score, passed, flags,
-                         level_before, level_after))
+                         per_question, level_before, level_after))
         return get_assessment_attempt(cur.lastrowid)
 
 
@@ -368,11 +418,19 @@ def delete_assessment_attempt(attempt_id):
 
 # ---------------------------------------------------------------- users / auth
 
-def create_user(email, password, role, display_name):
+def create_user(email, role, display_name, password=None, auth_provider="local", google_sub=None, verified=0, country=None, university=None):
+    """Create a user. Local accounts hash their password; Google accounts store none."""
+    pw_col = password or ""  # legacy NOT NULL constraint; auth always uses password_hash
+    hash_b64 = salt_b64 = None
+    if password:
+        from .auth import hash_password
+        hash_b64, salt_b64 = hash_password(password)
     with get_cursor() as c:
-        cur = c.execute("INSERT INTO users (email, password, role, display_name) VALUES (?,?,?,?)",
-                        (email, password, role, display_name))
-        return _row(c.execute("SELECT * FROM users WHERE id=?", (cur.lastrowid,)).fetchone())
+        cur = c.execute(
+            """INSERT INTO users (email, password, role, display_name, password_hash, password_salt, auth_provider, google_sub, verified, country, university)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+            (email, pw_col, role, display_name, hash_b64, salt_b64, auth_provider, google_sub, int(verified), country, university))
+        return get_user(cur.lastrowid)
 
 
 def get_user_by_email(email):
@@ -383,3 +441,184 @@ def get_user_by_email(email):
 def get_user(user_id):
     with get_cursor() as c:
         return _row(c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone())
+
+
+def get_user_by_google_sub(google_sub):
+    with get_cursor() as c:
+        return _row(c.execute("SELECT * FROM users WHERE google_sub=?", (google_sub,)).fetchone())
+
+
+def get_user_by_email_or_google_sub(email, google_sub=None):
+    u = get_user_by_email(email)
+    if u:
+        return u
+    if google_sub:
+        return get_user_by_google_sub(google_sub)
+    return None
+
+
+def public_user(user):
+    """Role-safe projection of a user record — never includes hash or salt."""
+    return {"id": user["id"], "email": user["email"], "role": user["role"],
+            "display_name": user["display_name"], "auth_provider": user.get("auth_provider", "local"),
+            "verified": bool(user.get("verified")), "country": user.get("country") or "",
+            "university": user.get("university") or ""}
+
+
+def set_user_password(user_id, password):
+    from .auth import hash_password
+    hash_b64, salt_b64 = hash_password(password)
+    with get_cursor() as c:
+        c.execute("UPDATE users SET password_hash=?, password_salt=?, auth_provider='local' WHERE id=?",
+                  (hash_b64, salt_b64, user_id))
+
+
+def check_credentials(email, password):
+    """Verify email/password. Returns the user row or None. Supports legacy
+    plaintext rows so pre-upgrade seed accounts keep signing in."""
+    user = get_user_by_email(email)
+    if not user:
+        return None
+    if user.get("auth_provider") == "google" or (user.get("password_hash") is None and user.get("auth_provider") == "google"):
+        return None
+    if user.get("password_hash"):
+        from .auth import verify_password
+        if verify_password(password, user["password_hash"], user["password_salt"]):
+            return user
+        return None
+    # legacy plaintext
+    if user.get("password") and hmac_compat(password, user["password"]):
+        return user
+    return None
+
+
+def hmac_compat(a, b):
+    import hmac as _hmac
+    return _hmac.compare_digest(bytes(a, "utf-8"), bytes(b, "utf-8"))
+
+
+# ---------------------------------------------------------------- sessions
+
+def create_session(user_id, token=None):
+    if token is None:
+        from .auth import new_session_token
+        token = new_session_token()
+    with get_cursor() as c:
+        c.execute("INSERT INTO sessions (token, user_id) VALUES (?,?)", (token, user_id))
+    return token
+
+
+def get_session_user(token):
+    if not token:
+        return None
+    with get_cursor() as c:
+        r = c.execute("""SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
+                         WHERE s.token=?""", (token,)).fetchone()
+        return _row(r) if r else None
+
+
+def delete_session(token):
+    if not token:
+        return
+    with get_cursor() as c:
+        c.execute("DELETE FROM sessions WHERE token=?", (token,))
+
+
+# ---------------------------------------------------------------- google registrations (role pending)
+
+def upsert_google_registration(google_sub, email, display_name):
+    with get_cursor() as c:
+        c.execute("""INSERT INTO google_registrations (google_sub, email, display_name) VALUES (?,?,?)
+                     ON CONFLICT(google_sub) DO UPDATE SET display_name=excluded.display_name""",
+                  (google_sub, email, display_name))
+        return _row(c.execute("SELECT * FROM google_registrations WHERE google_sub=?", (google_sub,)).fetchone())
+
+
+def get_google_registration(google_sub):
+    with get_cursor() as c:
+        return _row(c.execute("SELECT * FROM google_registrations WHERE google_sub=?", (google_sub,)).fetchone())
+
+
+def delete_google_registration(google_sub):
+    with get_cursor() as c:
+        c.execute("DELETE FROM google_registrations WHERE google_sub=?", (google_sub,))
+
+
+# ---------------------------------------------------------------- password resets
+
+def create_password_reset(user_id):
+    from .auth import new_reset_token, reset_expiry_iso
+    token = new_reset_token()
+    with get_cursor() as c:
+        c.execute("INSERT INTO password_resets (token, user_id, expires_at) VALUES (?,?,?)",
+                  (token, user_id, reset_expiry_iso()))
+        return _row(c.execute("SELECT * FROM password_resets WHERE token=?", (token,)).fetchone())
+
+
+def get_password_reset(token):
+    with get_cursor() as c:
+        return _row(c.execute("SELECT * FROM password_resets WHERE token=?", (token,)).fetchone())
+
+
+def consume_password_reset(token):
+    """Mark a reset token used; returns affected user id, or None if unusable."""
+    row = get_password_reset(token)
+    if not row or row["used"]:
+        return None
+    from .auth import utcnow_iso
+    if row["expires_at"] < utcnow_iso():
+        return None
+    with get_cursor() as c:
+        c.execute("UPDATE password_resets SET used=1 WHERE token=?", (token,))
+    return row["user_id"]
+
+
+# ------------------------------------------------------------------ universities
+
+def list_universities():
+    """Countries with their universities, grouped and ordered."""
+    groups = {}
+    with get_cursor() as c:
+        rows = c.execute("SELECT country, name FROM universities ORDER BY country, name").fetchall()
+    for r in rows:
+        groups.setdefault(r["country"], []).append(r["name"])
+    return [{"country": ctry, "universities": names} for ctry, names in groups.items()]
+
+
+def add_university(country, name):
+    with get_cursor() as c:
+        c.execute("INSERT OR IGNORE INTO universities (country, name) VALUES (?,?)", (country, name))
+
+
+# ------------------------------------------------------------------ email verification
+
+def create_email_verification(user_id):
+    from .auth import new_reset_token, reset_expiry_iso
+    token = new_reset_token()
+    with get_cursor() as c:
+        c.execute("INSERT INTO email_verifications (token, user_id, expires_at) VALUES (?,?,?)",
+                  (token, user_id, reset_expiry_iso()))
+        return _row(c.execute("SELECT * FROM email_verifications WHERE token=?", (token,)).fetchone())
+
+
+def get_email_verification(token):
+    with get_cursor() as c:
+        return _row(c.execute("SELECT * FROM email_verifications WHERE token=?", (token,)).fetchone())
+
+
+def consume_email_verification(token):
+    """Mark a verification token used; returns affected user id, or None if unusable."""
+    row = get_email_verification(token)
+    if not row or row["used"]:
+        return None
+    from .auth import utcnow_iso
+    if row["expires_at"] < utcnow_iso():
+        return None
+    with get_cursor() as c:
+        c.execute("UPDATE email_verifications SET used=1 WHERE token=?", (token,))
+    return row["user_id"]
+
+
+def set_user_verified(user_id):
+    with get_cursor() as c:
+        c.execute("UPDATE users SET verified=1 WHERE id=?", (user_id,))
