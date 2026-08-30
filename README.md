@@ -69,7 +69,7 @@ scripts/
 
 ### Recommended: VS Code + WSL Ubuntu
 
-This is the most reliable path for Windows users. Open the repo folder in VS Code using **WSL: Reopen Folder in WSL** or run the commands below in an Ubuntu terminal.
+This is the most reliable path for Windows users. Open the repo folder in VS Code using **WSL: Reopen Folder in WSL** or run the commands below in an Ubuntu terminal. Paste only the commands, not the shell prompt.
 
 ```bash
 git clone https://github.com/khaled1234kh/SkillBridge.git
@@ -94,6 +94,17 @@ Open the URL printed by the script, usually:
 
 - <http://localhost:8000>
 - or a fallback port such as <http://localhost:8001>, <http://localhost:8002>, etc.
+
+To use OpenCode in the VS Code project terminal, install it once in WSL, reload the terminal, and start it from the project root:
+
+```bash
+curl -fsSL https://opencode.ai/install | bash
+source ~/.bashrc
+cd /mnt/c/Users/<your-user>/Downloads/SkillBridge-main/SkillBridge
+opencode
+```
+
+If the project is cloned in your WSL home directory, use `cd ~/SkillBridge` instead. OpenCode runs with the current project directory as its workspace. `/connect` is an OpenCode command and should be entered only after OpenCode has opened. OpenCode is a separate developer tool and is not installed by the SkillBridge setup.
 
 ### Optional: VS Code Dev Container
 
