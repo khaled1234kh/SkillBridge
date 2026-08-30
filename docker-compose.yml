@@ -1,0 +1,12 @@
+services:
+  backend:
+    build: .
+    working_dir: /app
+    command: /bin/sh -c "while true; do sleep 600; done"
+    ports:
+      - "8002:8000"
+    volumes:
+      - .:/app
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+      - DATABASE_URL=/app/backend/skillbridge.db
