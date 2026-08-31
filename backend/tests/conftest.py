@@ -1,11 +1,18 @@
 import sqlite3
-
 import pytest
+from unittest.mock import patch
 
 from app import database, seed
 
 # Use a shared in-memory SQLite connection for all tests so each test starts
 # from freshly seeded data and nothing persists across tests.
+
+
+@pytest.fixture(autouse=True)
+def mock_validate_live():
+    """Mock validate_live to return input unchanged (deterministic, no network)."""
+    with patch("app.resources.validate_live", side_effect=lambda r, **kw: r):
+        yield
 
 
 @pytest.fixture()

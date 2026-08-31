@@ -451,32 +451,34 @@ def _search_youtube(skill_name, target_role, limit=3):
 
 
 _CHECK_CACHE = {}
+_CACHE_TTL = 24 * 60 * 60  # 24 hours
+import time
 
 
 def _live(url, timeout=1.5):
-    """Cheap connectivity check for a URL; tolerant — unverifiable links are kept."""
+    """Cheap connectivity check; KEEP link on ANY failure (timeout, error, 4xx/5xx).
+    Only drop if we get a FAST 4xx/5xx response. Cache results for 24h."""
     cached = _CHECK_CACHE.get(url)
-    if cached is not None:
-        return cached
+    if cached and (time.time() - cached["ts"]) < _CACHE_TTL:
+        return cached["ok"]
     try:
         import httpx
         r = httpx.head(url, follow_redirects=True, timeout=timeout)
         ok = r.status_code < 400
     except Exception:
-        ok = True  # network unavailable — assume curated link is fine
-    # Cache failures too (per-URL) so repeated seeding does not re-scan.
-    _CHECK_CACHE[url] = ok
+        ok = True  # Network unavailable / timeout / any error -> KEEP link
+    _CHECK_CACHE[url] = {"ok": ok, "ts": time.time()}
     return ok
 
 
-def validate_live(resources):
+def validate_live(resources, live_check=True):
     """Drop links that provably fail; keep unverifiable (offline) links.
 
     Checks run concurrently with a short timeout and results are cached per
     process so bulk seeding stays quick even fully offline.
     """
-    if not resources:
-        return []
+    if not resources or not live_check:
+        return resources
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=16) as ex:
         results = list(ex.map(lambda r: (r, _live(r["url"])), resources))
@@ -514,7 +516,7 @@ def retrieve_resources(skill_name, category, target_role=None, live_check=True, 
         merged.append(r)
 
     if live_check:
-        merged = validate_live(merged)
+        merged = validate_live(merged, live_check=True)
 
     for i, r in enumerate(merged[:max_items], start=1):
         r["rank"] = i

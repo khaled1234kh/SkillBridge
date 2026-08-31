@@ -156,7 +156,7 @@ def test_signup_invalid_role_rejected(client):
     r = client.post("/api/auth/signup", json={
         "email": "bad-role@x.edu", "password": "supersecret1",
         "display_name": "Bad", "role": "Superuser"})
-    assert r.status_code == 400
+    assert r.status_code == 422
 
 
 def test_logout_invalidates_session(client, login):

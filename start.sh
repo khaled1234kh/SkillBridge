@@ -30,21 +30,20 @@ if [ "$MODE" = "docker" ]; then
     echo "==> Removing SkillBridge containers and data volumes"
     docker compose down --volumes --remove-orphans
   fi
-  echo "==> Building and starting SkillBridge containers"
+  echo "==> Building and starting SkillBridge container"
   docker compose up --build -d
   echo "==> Waiting for the backend health endpoint"
   for _ in $(seq 1 60); do
     if command -v curl >/dev/null 2>&1 && curl -fsS http://localhost:8000/api/universities >/dev/null 2>&1; then
       echo ""
       echo "SkillBridge is running in Docker."
-      echo "  Frontend: http://localhost:3000"
-      echo "  Backend:  http://localhost:8000"
+      echo "  App: http://localhost:8000"
       echo "  Logs:     docker compose logs -f"
       exit 0
     fi
     sleep 2
   done
-  echo "SkillBridge containers did not become ready. Showing their status and logs:" >&2
+  echo "SkillBridge container did not become ready. Showing status and logs:" >&2
   docker compose ps >&2
   docker compose logs --tail=80 >&2
   exit 1

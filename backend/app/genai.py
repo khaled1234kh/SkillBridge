@@ -410,7 +410,7 @@ def generate_learning_item(skill_name, skill_category, target_role, student_cont
 
     def fallback():
         from . import resources as resources_mod
-        res = resources_mod.retrieve_resources(skill_name, skill_category, target_role)
+        res = resources_mod.retrieve_resources(skill_name, skill_category, target_role, live_check=False)
         explanation = (
             f"{_role_context_blurb(skill_name, target_role)}\n\n"
             f"You already have relevant foundations to build on "

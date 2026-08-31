@@ -18,6 +18,12 @@ from fastapi.responses import FileResponse, RedirectResponse
 
 from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity
 from .database import init_db, get_cursor
+from .schemas import (
+    SignupRequest, LoginRequest, CreateRoleRequest, UpdateRoleRequest,
+    UpdateStudentRequest, GenerateLearningRequest, GenerateAssessmentRequest,
+    SubmitAssessmentRequest, TutorChatRequest, ResetRequest, ResetConfirmRequest,
+    VerifyRequest, CreateSkillRequest,
+)
 
 FRONTEND_DIST = os.environ.get(
     "SKILLBRIDGE_FRONTEND_DIST",
@@ -25,6 +31,15 @@ FRONTEND_DIST = os.environ.get(
 )
 
 app = FastAPI(title="SkillBridge")
+
+# --- Health endpoints (must be before catch-all route) ---
+@app.get("/healthz")
+def health():
+    return {"status": "ok"}
+
+@app.get("/health")
+def health_legacy():
+    return {"status": "ok"}
 
 app.add_middleware(
     CORSMiddleware,
@@ -139,13 +154,13 @@ def _own_company_role(user, role_id):
 # ------------------------------------------------------------------ auth endpoints
 
 @app.post("/api/auth/signup")
-def signup(body: dict, background_tasks: BackgroundTasks):
-    email = (body.get("email") or "").strip().lower()
-    password = body.get("password") or ""
-    display_name = (body.get("display_name") or "").strip()
-    role = body.get("role")
-    country = (body.get("country") or "").strip()
-    university = (body.get("university") or "").strip()
+def signup(body: SignupRequest, background_tasks: BackgroundTasks):
+    email = body.email.strip().lower()
+    password = body.password
+    display_name = body.display_name.strip()
+    role = body.role
+    country = (body.country or "").strip()
+    university = (body.university or "").strip()
     if not email or not password or not display_name:
         raise HTTPException(status_code=400, detail="Email, password and display name are required")
     if len(password) < 8:
@@ -166,7 +181,7 @@ def signup(body: dict, background_tasks: BackgroundTasks):
     if role == "Student":
         models.create_student(display_name, email, university, user_id=user["id"])
     elif role == "Company":
-        models.create_company(display_name, (body.get("industry") or "").strip(), user_id=user["id"])
+        models.create_company(display_name, (body.industry or "").strip(), user_id=user["id"])
     elif role == "University Admin":
         _upsert_university(country, university)
     if verify:
@@ -180,9 +195,9 @@ def signup(body: dict, background_tasks: BackgroundTasks):
 
 
 @app.post("/api/auth/login")
-def login(body: dict):
-    email = (body.get("email") or "").strip().lower()
-    password = body.get("password") or ""
+def login(body: LoginRequest):
+    email = body.email.strip().lower()
+    password = body.password
     user = models.check_credentials(email, password)
     if not user:
         raise HTTPException(status_code=401, detail="Invalid email or password")
@@ -275,8 +290,8 @@ def google_complete(body: dict):
 
 
 @app.post("/api/auth/reset/request")
-def reset_request(body: dict, background_tasks: BackgroundTasks):
-    email = (body.get("email") or "").strip().lower()
+def reset_request(body: ResetRequest, background_tasks: BackgroundTasks):
+    email = body.email.strip().lower()
     user = models.get_user_by_email(email)
     if not user or user.get("auth_provider") == "google":
         # Do not leak whether an account exists.
@@ -293,9 +308,9 @@ def reset_request(body: dict, background_tasks: BackgroundTasks):
 
 
 @app.post("/api/auth/reset/confirm")
-def reset_confirm(body: dict):
-    token = (body.get("token") or "").strip()
-    new_password = body.get("new_password") or ""
+def reset_confirm(body: ResetConfirmRequest):
+    token = body.token.strip()
+    new_password = body.new_password
     if not token or len(new_password) < 8:
         raise HTTPException(status_code=400, detail="A valid token and a password of 8+ characters are required")
     user_id = models.consume_password_reset(token)
@@ -308,9 +323,9 @@ def reset_confirm(body: dict):
 # ------------------------------------------------------------------ email verification
 
 @app.post("/api/auth/verify")
-def verify_email(body: dict):
+def verify_email(body: VerifyRequest):
     """Verify a user's email using the token emailed at signup."""
-    token = (body.get("token") or "").strip()
+    token = body.token.strip()
     user_id = models.consume_email_verification(token)
     if not user_id:
         raise HTTPException(status_code=400, detail="Verification link is invalid or expired")
@@ -346,9 +361,9 @@ def api_list_skills(request: Request):
 
 
 @app.post("/api/skills")
-def api_create_skill(request: Request, body: dict):
+def api_create_skill(request: Request, body: CreateSkillRequest):
     _current_user(request)
-    name, category = body["name"], body.get("category", "General")
+    name, category = body.name, body.category
     existing = models.get_skill_by_name(name)
     if existing:
         return existing
@@ -395,22 +410,25 @@ def api_get_role(role_id: int, request: Request):
 
 
 @app.post("/api/roles")
-def api_create_role(request: Request, body: dict):
+def api_create_role(request: Request, body: CreateRoleRequest):
     user = _current_user(request)
     _require_roles(user, "Company")
     company = models.get_company_by_user(user["id"]) or {}
     if not company.get("id"):
         raise HTTPException(status_code=403, detail="No company linked to this account")
-    return models.create_role(company["id"], body["title"],
-                              body.get("required_skills", []), body.get("description"))
+    required_skills = [{"name": s.name, "level": s.level, "category": s.category} for s in body.required_skills]
+    return models.create_role(company["id"], body.title, required_skills, body.description)
 
 
 @app.put("/api/roles/{role_id}")
-def api_update_role(role_id: int, request: Request, body: dict):
+def api_update_role(role_id: int, request: Request, body: UpdateRoleRequest):
     user = _current_user(request)
     role = _own_company_role(user, role_id)
-    return models.update_role(role_id, body.get("title") or role["title"],
-                              body.get("description"), body.get("required_skills"))
+    required_skills = None
+    if body.required_skills is not None:
+        required_skills = [{"name": s.name, "level": s.level, "category": s.category} for s in body.required_skills]
+    return models.update_role(role_id, body.title or role["title"],
+                              body.description, required_skills)
 
 
 @app.delete("/api/roles/{role_id}")
@@ -513,11 +531,20 @@ def api_get_student(student_id: int, request: Request):
 
 
 @app.put("/api/students/{student_id}")
-def api_update_student(student_id: int, request: Request, body: dict):
+def api_update_student(student_id: int, request: Request, body: UpdateStudentRequest):
     user = _current_user(request)
     _own_student(user, student_id)
-    fields = {k: v for k, v in body.items() if k in
-              ("name", "email", "university", "target_role_id", "cv_filename")}
+    fields = {}
+    if body.name is not None:
+        fields["name"] = body.name
+    if body.email is not None:
+        fields["email"] = body.email
+    if body.university is not None:
+        fields["university"] = body.university
+    if body.target_role_id is not None:
+        fields["target_role_id"] = body.target_role_id
+    if body.cv_filename is not None:
+        fields["cv_filename"] = body.cv_filename
     return models.update_student(student_id, **fields)
 
 
@@ -572,10 +599,10 @@ def api_student_activity(student_id: int, request: Request):
 # ------------------------------------------------------------------ learning
 
 @app.post("/api/students/{student_id}/learning/generate")
-def api_generate_learning(student_id: int, request: Request, body: dict):
+def api_generate_learning(student_id: int, request: Request, body: GenerateLearningRequest):
     user = _current_user(request)
     _own_student(user, student_id)
-    skill_id = body["skill_id"]
+    skill_id = body.skill_id
     student = models.get_student(student_id)
     role = student.get("target_role")
     if not role:
@@ -617,11 +644,11 @@ def api_tutor_history(student_id: int, request: Request, skill_id: int = None):
 
 
 @app.post("/api/students/{student_id}/tutor")
-def api_tutor_chat(student_id: int, request: Request, body: dict):
+def api_tutor_chat(student_id: int, request: Request, body: TutorChatRequest):
     user = _current_user(request)
     _own_student(user, student_id)
-    question = body.get("message", "")
-    skill_id = body.get("skill_id")
+    question = body.message
+    skill_id = body.skill_id
     student = models.get_student(student_id)
     role = student.get("target_role")
     skill_name = models.get_skill(skill_id)["name"] if skill_id else None
@@ -637,12 +664,12 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
 # ------------------------------------------------------------------ assessments
 
 @app.post("/api/students/{student_id}/assessments/generate")
-def api_generate_assessment(student_id: int, request: Request, body: dict):
+def api_generate_assessment(student_id: int, request: Request, body: GenerateAssessmentRequest):
     user = _current_user(request)
     _own_student(user, student_id)
-    skill_id = body["skill_id"]
-    num_questions = min(max(int(body.get("num_questions") or 10), 3), 20)
-    practice = bool(body.get("practice"))
+    skill_id = body.skill_id
+    num_questions = body.num_questions
+    practice = body.practice
     student = models.get_student(student_id)
     role = student.get("target_role")
     skill = models.get_skill(skill_id)
@@ -667,15 +694,15 @@ def api_generate_assessment(student_id: int, request: Request, body: dict):
 
 
 @app.post("/api/students/{student_id}/assessments")
-def api_submit_assessment(student_id: int, request: Request, body: dict):
+def api_submit_assessment(student_id: int, request: Request, body: SubmitAssessmentRequest):
     user = _current_user(request)
     _own_student(user, student_id)
-    skill_id = body["skill_id"]
-    questions = body.get("questions", [])
-    answers = body.get("answers", [])
-    total_seconds = body.get("total_seconds")
-    tab_switches = int(body.get("tab_switches") or 0)
-    free_text_answers = body.get("free_text_answers") or []
+    skill_id = body.skill_id
+    questions = body.questions
+    answers = body.answers
+    total_seconds = body.total_seconds
+    tab_switches = body.tab_switches
+    free_text_answers = body.free_text_answers
 
     skill = models.get_skill(skill_id)
     student = models.get_student(student_id)
