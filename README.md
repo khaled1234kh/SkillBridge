@@ -67,7 +67,7 @@ scripts/
 
 One command starts the whole app from VS Code, PowerShell, cmd, Git Bash, or a
 Mac/Linux terminal. It runs the frontend build then starts the backend, which
-serves the app at <http://localhost:8000>. It runs in the foreground, so logs
+serves the app at `http://127.0.0.1:8000`. It runs in the foreground, so logs
 stream live and **Ctrl+C stops it** — you keep full control.
 
 ```bash
@@ -77,7 +77,7 @@ cd SkillBridge
 npm start
 ```
 
-On Windows in PowerShell you can also run `.\start.ps1`.
+On Windows in PowerShell you can also run `.\start.ps1`. In cmd use `start.bat`.
 
 Prerequisites: **Node.js 18+** (required) and **Python 3.10+** (must be on your PATH).
 
@@ -85,9 +85,10 @@ What `npm start` does automatically (only on first run, then it's fast):
 1. Creates a Python virtual environment (`.venv`) and installs backend deps.
 2. Installs frontend deps and builds the frontend.
 3. Seeds the SQLite database with realistic sample data.
-4. Starts the server and prints the URL to open.
+4. Starts the server and prints the URL to open (e.g. `http://127.0.0.1:8000`).
 
 > Everything runs locally with just SQLite — no cloud dependency, no account needed.
+> **On Windows, use `http://127.0.0.1:8000` (not `localhost`) to avoid IPv6 resolution issues.**
 
 Options:
 
@@ -114,16 +115,15 @@ cd SkillBridge
 ./start.sh
 ```
 
-On Windows, you can also double-click `start.bat`. Then open <http://localhost:3000>.
+On Windows, you can also double-click `start.bat`. Then open `http://127.0.0.1:8000` (use `127.0.0.1`, not `localhost`, on Windows to avoid IPv6 resolution issues).
 
-`./start.sh` builds and starts all containers automatically:
+`./start.sh` builds and starts the single-container app automatically:
 
-1. Builds the backend and frontend images.
-2. Starts the backend, frontend, and database containers with health checks.
+1. Builds the multi-stage Docker image (frontend build → Python runtime serving both API + static files).
+2. Starts the container with health checks on port 8000.
 3. Creates and seeds the SQLite database in a persistent Docker volume with realistic
    sample data — students, companies, roles, skills, and completed assessments — so
    every screen is alive on first launch.
-4. Connects the frontend container to the backend container on the Compose network.
 
 > **No cloud dependency** — the whole app runs locally with just SQLite. No account
 > signup or external setup is required to try it.

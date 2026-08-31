@@ -78,7 +78,7 @@ export function run(cmd, argList, opts = {}) {
   const r = spawnSync(cmd, argList, {
     cwd: opts.cwd || ROOT,
     stdio: opts.stdio === undefined ? 'inherit' : opts.stdio,
-    shell: false,
+    shell: process.platform === 'win32',
     env: { ...process.env, ...(opts.env || {}) },
   })
   if (r.status !== 0) {
