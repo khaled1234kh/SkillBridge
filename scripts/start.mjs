@@ -32,6 +32,14 @@ if (portIdx !== -1 && process.argv[portIdx + 1]) {
   PORT = parseInt(process.argv[portIdx + 1], 10)
 }
 
+// Detect if we're running from the project root (has package.json) or from a parent dir
+const packageJsonPath = path.join(ROOT, 'package.json')
+if (!existsSync(packageJsonPath)) {
+  log('Error: Please run this command from the project root (where package.json is).')
+  log(`Current ROOT: ${ROOT}`)
+  process.exit(1)
+}
+
 async function portInUse(port) {
   const net = await import('node:net')
   return await new Promise((resolve) => {
