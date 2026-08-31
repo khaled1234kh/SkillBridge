@@ -222,6 +222,21 @@ export SKILLBRIDGE_EMAIL_DISABLED=0       # set 1 to force demo/log mode even if
 Emails are delivered on a background task, so a slow or unreachable SMTP host never blocks or
 freezes the create-account / password-reset request.
 
+## Troubleshooting
+
+- **Browser shows a JSON fallback (`{"service":"SkillBridge API",...}`) instead of the app.**
+  In Docker this almost always means something else on your machine is already holding
+  port 8000 and intercepting the request before Docker does — most commonly a **stale
+  uvicorn left running inside WSL** (from a previous `start.sh` run in a Linux/WSL shell).
+  Because WSL relays its port 8000 to the host, that old server (which has no built
+  frontend) shadows the Docker container. Fix:
+  ```bash
+  wsl -d Ubuntu -- sh -c "ss -tlnp | grep :8000"   # find the leftover PID
+  wsl -d Ubuntu -- sh -c "kill <PID>"               # stop it
+  ```
+  Then refresh `http://127.0.0.1:8000` — the Docker container now serves the app. You
+  can confirm nothing is shadowing the port with `netstat -ano | findstr ":8000"`.
+
 ## Tests
 
 ```bash
