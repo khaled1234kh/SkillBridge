@@ -78,6 +78,7 @@ export interface Student {
   target_role?: RoleRecord
   cv_filename?: string | null
   cohort_confirmed?: number
+  share_public?: number
   self_reported_skills: SelfReportedSkill[]
   verified_skills: VerifiedSkill[]
 }
@@ -158,6 +159,7 @@ export interface LearningItem {
   mini_project: string
   resources: LearningResource[] | null
   roadmap: Roadmap | null
+  progress?: number[]
   generated_at: string
 }
 
@@ -291,4 +293,20 @@ export interface RoleSkillCoverage {
 export interface GoogleConfig {
   configured: boolean
   demo: boolean
+}
+
+export interface PublicVerifiedSkill {
+  skill_id: number
+  name: string
+  category: string
+  level: string
+  verified_at: string
+}
+
+export interface PublicProfile {
+  student_id: number
+  name: string
+  university: string
+  target_role: { title: string; company?: string } | null
+  verified_skills: PublicVerifiedSkill[]
 }

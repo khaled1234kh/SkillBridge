@@ -1,6 +1,6 @@
 import type {
   ActivitySummary, Analysis, AssessmentAttempt, Candidate, CohortResponse, Company, GeneratedAssessment,
-  GoogleConfig, LearningItem, QuizQuestion, RoleRecord, RolesResponse, RoleSkillCoverage, Skill, Student,
+  GoogleConfig, LearningItem, QuizQuestion, PublicProfile, RoleRecord, RolesResponse, RoleSkillCoverage, Skill, Student,
   Session, TutorMessage, UniversityStatsResponse, UniversityOption,
 } from './types'
 
@@ -102,6 +102,10 @@ export const api = {
   learning: (studentId: number) => req<LearningItem[]>(`/api/students/${studentId}/learning`),
   generateLearning: (studentId: number, skillId: number) =>
     req<LearningItem>(`/api/students/${studentId}/learning/generate`, { method: 'POST', body: JSON.stringify({ skill_id: skillId }) }),
+  learningProgress: (studentId: number, skillId: number, steps: number[]) =>
+    req<LearningItem>(`/api/students/${studentId}/learning/${skillId}/progress`, { method: 'POST', body: JSON.stringify({ steps }) }),
+
+  publicProfile: (studentId: number) => req<PublicProfile>(`/api/public/verified/${studentId}`),
 
   tutorHistory: (studentId: number) => req<TutorMessage[]>(`/api/students/${studentId}/tutor`),
   tutorSend: (studentId: number, message: string, skillId?: number | null) =>

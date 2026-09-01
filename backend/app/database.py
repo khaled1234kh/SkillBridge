@@ -112,7 +112,8 @@ CREATE TABLE IF NOT EXISTS students (
     university TEXT NOT NULL,
     target_role_id INTEGER REFERENCES roles(id) ON DELETE SET NULL,
     cv_filename TEXT,
-    cohort_confirmed INTEGER NOT NULL DEFAULT 0
+    cohort_confirmed INTEGER NOT NULL DEFAULT 0,
+    share_public INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS companies (
@@ -171,6 +172,7 @@ CREATE TABLE IF NOT EXISTS learning_path_items (
     mini_project TEXT,
     resources TEXT,
     roadmap TEXT,
+    progress TEXT,
     generated_at TEXT NOT NULL DEFAULT (datetime('now')),
     UNIQUE(student_id, skill_id)
 );
@@ -213,9 +215,11 @@ def _migrate():
         ("users", "country", "TEXT"),
         ("users", "university", "TEXT"),
         ("students", "cohort_confirmed", "INTEGER NOT NULL DEFAULT 0"),
+        ("students", "share_public", "INTEGER NOT NULL DEFAULT 0"),
         ("roles", "is_reference", "INTEGER NOT NULL DEFAULT 0"),
         ("learning_path_items", "resources", "TEXT"),
         ("learning_path_items", "roadmap", "TEXT"),
+        ("learning_path_items", "progress", "TEXT"),
         ("assessment_attempts", "per_question", "TEXT"),
     ]
     conn = _connect()

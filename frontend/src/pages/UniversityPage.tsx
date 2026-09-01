@@ -97,38 +97,34 @@ export default function UniversityPage() {
             <h3 style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <IconUniversity size={18} /> Recommended skill gaps across the cohort
             </h3>
-            <p className="card-sub">Share of students who need improvement in each required skill (gap or missing).</p>
-            <table className="table">
-              <thead>
-                <tr>
-                  <th>Skill</th>
-                  <th>Category</th>
-                  <th>Strong</th>
-                  <th>Gap</th>
-                  <th>Missing</th>
-                  <th>Need improvement</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(data.skill_stats || []).map((s) => (
-                  <tr key={s.skill_name}>
-                    <td style={{ fontWeight: 600 }}>{s.skill_name}</td>
-                    <td className="muted">{s.category}</td>
-                    <td>{s.strong}</td>
-                    <td>{s.gap}</td>
-                    <td>{s.missing}</td>
-                    <td>
-                      <div className="flex">
-                        <div className="bar-wrap">
-                          <div className="bar-fill" style={{ width: `${s.need_improvement_pct}%` }} />
-                        </div>
-                        <span className="small" style={{ minWidth: 48 }}>{s.need_improvement_pct}%</span>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <p className="card-sub">Share of students in each bucket for every required skill (percent of cohort).</p>
+            <div className="u-legend">
+              <span className="u-leg"><span className="seg-strong" /> Strong</span>
+              <span className="u-leg"><span className="seg-gap" /> Gap</span>
+              <span className="u-leg"><span className="seg-missing" /> Missing</span>
+              <span className="u-leg pushed"><span className="u-need" /> % need improvement</span>
+            </div>
+            <div className="u-bars">
+              {(data.skill_stats || []).map((s) => {
+                const total = Math.max(1, s.strong + s.gap + s.missing)
+                return (
+                  <div className="u-bar-row" key={s.skill_name}>
+                    <div className="u-bar-label">
+                      <div className="u-bar-name">{s.skill_name}</div>
+                      <div className="u-bar-cat">{s.category}</div>
+                    </div>
+                    <div className="u-bar-track">
+                      <div className="u-bar-seg seg-strong" style={{ width: `${(s.strong / total) * 100}%` }} title={`Strong: ${s.strong}`} />
+                      <div className="u-bar-seg seg-gap" style={{ width: `${(s.gap / total) * 100}%` }} title={`Gap: ${s.gap}`} />
+                      <div className="u-bar-seg seg-missing" style={{ width: `${(s.missing / total) * 100}%` }} title={`Missing: ${s.missing}`} />
+                    </div>
+                    <div className={`u-bar-need ${s.need_improvement_pct >= 60 ? 'high' : s.need_improvement_pct >= 40 ? 'med' : ''}`}>
+                      {s.need_improvement_pct}%
+                    </div>
+                  </div>
+                )
+              })}
+            </div>
             <div className="divider" />
             <div className="flex" style={{ gap: 18, color: 'var(--slate-500)', fontSize: 12.5, flexWrap: 'wrap' }}>
               <span><IconVerified size={14} style={{ color: 'var(--green)' }} /> Verified skills are counted from passed assessments only.</span>

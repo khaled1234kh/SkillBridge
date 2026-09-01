@@ -2,8 +2,8 @@ import React, { useEffect, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import type { Analysis, ActivitySummary, Student, RoleRecord, Candidate, RoleSkillCoverage } from '../lib/types'
-import { ScoreRing, GapPill, SkillTag, LevelBadge } from '../components/widgets'
-import { IconArrowRight, IconCompany, IconRoles, IconCheck, IconVerified, IconFlame, IconBolt, IconLeaderboard, IconTrophy } from '../components/Icons'
+import { GapPill, SkillTag, LevelBadge } from '../components/widgets'
+import { IconArrowRight, IconCheck, IconVerified, IconFlame, IconBolt, IconLeaderboard, IconTrophy, IconExternal, IconShield } from '../components/Icons'
 
 function nextStep(analysis: Analysis | undefined): string {
   if (!analysis) return 'Select a target role'
@@ -14,24 +14,126 @@ function nextStep(analysis: Analysis | undefined): string {
   return target ? target.skill_name : 'Take the next assessment'
 }
 
-export default function DashboardPage() {
+function copyText(text: string): Promise<void> {
+  if (navigator.clipboard?.writeText) return navigator.clipboard.writeText(text)
+  const ta = document.createElement('textarea')
+  ta.value = text
+  document.body.appendChild(ta)
+  ta.select()
+  document.execCommand('copy')
+  document.body.removeChild(ta)
+  return Promise.resolve()
+}
+
+export default function DashboardPage({ onNavigate }: { onNavigate?: (section: string) => void }) {
   const { me } = useApp()
   if (!me) return null
-  if (me.entity_type === 'student') return <StudentDashboard student={me.student} analysis={me.analysis ?? undefined} />
+  if (me.entity_type === 'student') return <StudentDashboard student={me.student} analysis={me.analysis ?? undefined} onNavigate={onNavigate} />
   if (me.entity_type === 'company') return <CompanyDashboard />
   return <UniversityDashboard />
 }
 
-function StudentDashboard({ student, analysis }: { student?: Student; analysis?: Analysis }) {
+function StudentDashboard({ student, analysis, onNavigate }: { student?: Student; analysis?: Analysis; onNavigate?: (section: string) => void }) {
+  const { refreshStudent } = useApp()
   const [activity, setActivity] = useState<ActivitySummary | null>(null)
+  const [shareOn, setShareOn] = useState(!!student?.share_public)
+  const [copied, setCopied] = useState('')
   useEffect(() => {
     if (student) api.studentActivity(student.id).then(setActivity).catch(() => {})
   }, [student?.id])
+  useEffect(() => setShareOn(!!student?.share_public), [student?.share_public])
   if (!student) return <div className="empty">No student profile linked to this account.</div>
+
   const gaps = analysis?.skill_gaps || []
   const strong = gaps.filter((g) => g.status === 'strong').length
   const gapCount = gaps.filter((g) => g.status !== 'strong').length
   const xpPct = activity ? Math.min(100, (activity.xp_into_level / activity.xp_per_level) * 100) : 0
+
+  const hasSkills = student.self_reported_skills.length > 0 || student.verified_skills.length > 0
+
+  // A skill belongs to exactly one row: verified evidence wins over self-reported.
+  const merged = new Map<number, { name: string; level: string; verified: boolean }>()
+  student.self_reported_skills.forEach((s) => merged.set(s.skill_id, { name: s.name, level: s.level, verified: false }))
+  student.verified_skills.forEach((v) => merged.set(v.skill_id, { name: v.name, level: v.level, verified: true }))
+  const skillRows = [...merged.values()].sort((a, b) => a.name.localeCompare(b.name))
+
+  const publicUrl = `${window.location.origin}/p/${student.id}`
+  const skillUrl = (skillId: number) => `${publicUrl}#skill-${skillId}`
+
+  const go = (section: string) => onNavigate?.(section)
+
+  const toggleShare = async (on: boolean) => {
+    setShareOn(on)
+    try {
+      await api.updateStudent(student.id, { share_public: on ? 1 : 0 })
+      refreshStudent()
+    } catch {
+      setShareOn(!on)
+    }
+  }
+
+  const copy = (label: string, text: string) => {
+    copyText(text).then(() => {
+      setCopied(label)
+      setTimeout(() => setCopied(''), 1600)
+    })
+  }
+
+  if (!analysis) {
+    return (
+      <div>
+        <div className="onboard">
+          <div className="onboard-mark"><IconVerified size={30} /></div>
+          {hasSkills ? (
+            <h3>Pick a target career to unlock your gap map</h3>
+          ) : (
+            <h3>Choose your target career to get started</h3>
+          )}
+          <p>
+            {hasSkills
+              ? 'You have a skill profile. Choose a career you are aiming for and SkillBridge will map what you already have against what the job needs.'
+              : 'Pick a career you are aiming for. SkillBridge matches it against your skills, then builds a verified learning + assessment loop to close the gaps.'}
+          </p>
+          <div className="onboard-cta">
+            <button className="btn btn-primary" onClick={() => go('skills')}>
+              <IconArrowRight size={16} /> Choose your target career
+            </button>
+          </div>
+          {!hasSkills && (
+            <p className="small muted" style={{ marginTop: 14 }}>
+              Tip: uploading a CV on the Skills &amp; Roles page seeds your self-reported skill profile first.
+            </p>
+          )}
+        </div>
+        {activity && (
+          <div className="activity-card card mt" style={{ marginTop: 18 }}>
+            <div className="act-head">
+              <h3 style={{ margin: 0 }}>My Learning Activity</h3>
+              <span className="act-lb">
+                Level {activity?.level ?? '–'}
+                <span className="act-level-bar"><span style={{ width: `${xpPct}%` }} /></span>
+                <span className="small muted">{activity ? `${activity.xp_into_level}/${activity.xp_per_level} XP` : ''}</span>
+              </span>
+            </div>
+            <div className="act-grid">
+              <div className="act-tile">
+                <div className="act-ico coral"><IconFlame size={20} /></div>
+                <div><strong>{activity?.streak_days ?? '–'}-day streak</strong><small className="muted">Keep a login streak going</small></div>
+              </div>
+              <div className="act-tile">
+                <div className="act-ico amber"><IconBolt size={20} /></div>
+                <div><strong>{activity?.xp ?? '–'} XP</strong><small className="muted">{activity?.active_days ?? 0} active days</small></div>
+              </div>
+              <div className="act-tile">
+                <div className="act-ico green"><IconTrophy size={20} /></div>
+                <div><strong>{activity?.verified_skills ?? 0} verified</strong><small className="muted">{activity?.assessments_taken ?? 0} assessments taken</small></div>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    )
+  }
 
   return (
     <div>
@@ -56,6 +158,7 @@ function StudentDashboard({ student, analysis }: { student?: Student; analysis?:
       <div className="grid grid-2">
         <div className="card">
           <h3>Skill Gap Map</h3>
+          <p className="card-sub">{strong} covered · {gapCount} to improve — the single score above is the same number these rows add up to.</p>
           <div className="legend">
             <span className="item"><GapPill status="strong" /> Strong</span>
             <span className="item"><GapPill status="gap" /> Gap</span>
@@ -63,7 +166,7 @@ function StudentDashboard({ student, analysis }: { student?: Student; analysis?:
           </div>
           <div className="stack">
             {gaps.length === 0 ? (
-              <div className="empty">Select a target role on the Skills & Roles page to see your gap map.</div>
+              <div className="empty">Select a target role on the Skills &amp; Roles page to see your gap map.</div>
             ) : (
               gaps.map((g) => (
                 <div className="skill-row" key={g.skill_id}>
@@ -72,7 +175,7 @@ function StudentDashboard({ student, analysis }: { student?: Student; analysis?:
                     <div className="sr-cat">{g.category}</div>
                   </div>
                   <div className="sr-right">
-                    {g.student_level ? <SkillTag name="" level={g.student_level} verified={g.verified} /> : null}
+                    {g.student_level ? <LevelBadge verified={g.verified} /> : null}
                     <GapPill status={g.status} />
                   </div>
                 </div>
@@ -82,33 +185,67 @@ function StudentDashboard({ student, analysis }: { student?: Student; analysis?:
         </div>
 
         <div className="card">
-          <h3>Job Match Score</h3>
-          <p className="card-sub">How well your current skills match {analysis?.role_title || 'your target role'}</p>
-          {analysis ? (
-            <ScoreRing value={analysis.match_score} />
-          ) : (
-            <div className="empty">No target role selected.</div>
-          )}
-          <div className="divider" />
-          <div className="flex between">
-            <span className="muted small">{strong} skills covered</span>
-            <span className="muted small">{gapCount} to improve</span>
+          <h3>My Skill Profile</h3>
+          <p className="card-sub">One row per skill — verified status always reflects your best evidence.</p>
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
+            {skillRows.map((s) => (
+              <SkillTag key={`${s.name}-${s.verified}`} name={s.name} level={s.level} verified={s.verified} />
+            ))}
+            {skillRows.length === 0 && (
+              <div className="stack" style={{ width: '100%', gap: 12 }}>
+                <span className="muted small">Upload a CV to build your self-reported profile.</span>
+                <button className="btn btn-sm" onClick={() => go('skills')}><IconArrowRight size={14} /> Go to Skills &amp; Roles</button>
+              </div>
+            )}
           </div>
-        </div>
-      </div>
-
-      <div className="card mt" style={{ marginTop: 18 }}>
-        <h3>My Skill Profile</h3>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
-          {student.self_reported_skills.map((s) => (
-            <SkillTag key={s.skill_id} name={s.name} level={s.level} verified={false} />
-          ))}
-          {student.verified_skills.map((s) => (
-            <SkillTag key={s.skill_id} name={s.name} level={s.level} verified={true} />
-          ))}
-          {student.self_reported_skills.length === 0 && (
-            <span className="muted small">Upload a CV to build your self-reported profile.</span>
-          )}
+          <div className="divider" />
+          <div className="profile-share">
+            <div className="share-head">
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: 13 }}>
+                <IconShield size={14} style={{ color: 'var(--green)' }} /> Share verified skills
+              </span>
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={shareOn}
+                  onChange={(e) => toggleShare(e.target.checked)}
+                  disabled={student.verified_skills.length === 0}
+                />
+                <span className="track" />
+              </label>
+            </div>
+            <p className="small muted" style={{ margin: '6px 0 10px', lineHeight: 1.5 }}>
+              {student.verified_skills.length === 0
+                ? 'Pass an assessment first — only verified skills can be shared, never self-reported claims.'
+                : shareOn
+                  ? 'Anyone with the link can see your verified skills and their assessment-pass dates.'
+                  : 'Your public profile is off. Turn it on to share proof of what you have verified.'}
+            </p>
+            {student.verified_skills.length > 0 && (
+              <div className="share-row">
+                <button className="btn btn-sm" onClick={() => copy('link', publicUrl)}>
+                  {copied === 'link' ? <IconCheck size={14} /> : <IconExternal size={14} />}
+                  {copied === 'link' ? 'Copied!' : 'Copy public link'}
+                </button>
+                {shareOn && (
+                  <a className="btn btn-sm" href={publicUrl} target="_blank" rel="noopener noreferrer">
+                    <IconExternal size={14} /> Open profile
+                  </a>
+                )}
+              </div>
+            )}
+            {shareOn && (
+              <div className="per-skill-share small muted" style={{ marginTop: 10 }}>
+                Per-skill share:
+                {student.verified_skills.map((v) => (
+                  <button key={v.skill_id} className="chip-btn" onClick={() => copy(`skill-${v.skill_id}`, skillUrl(v.skill_id))}>
+                    <span className="chip-share-dot" /> {v.name}
+                    {copied === `skill-${v.skill_id}` ? ' ✓' : ''}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
       </div>
 

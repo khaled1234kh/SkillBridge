@@ -6,6 +6,7 @@ import SkillsRolesPage from './pages/SkillsRolesPage'
 import LearningPage from './pages/LearningPage'
 import AssessmentsPage from './pages/AssessmentsPage'
 import UniversityPage from './pages/UniversityPage'
+import PublicProfilePage from './pages/PublicProfilePage'
 import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout } from './components/Icons'
 
 type Section = 'dashboard' | 'skills' | 'learning' | 'assessments' | 'university'
@@ -31,6 +32,14 @@ function Shell() {
     dashboard: 'Dashboard', skills: 'Skills & Roles', learning: 'Learning',
     assessments: 'Assessments', university: 'University Dashboard',
   }
+
+  const roleLabel =
+    role === 'Student'
+      ? me?.student?.target_role ? `Target: ${me.student.target_role.title}` : 'Set your target role'
+      : role === 'Company'
+        ? me?.company ? `Hiring at ${me.company.name}` : 'Company account'
+        : 'Administrator'
+  const roleClass = role === 'Student' ? 'role-chip student' : role === 'Company' ? 'role-chip company' : 'role-chip university'
 
   return (
     <div className="app-shell">
@@ -65,10 +74,11 @@ function Shell() {
             <h2>{titles[section]}</h2>
           </div>
           <div className="topbar-actions">
+            <span className={roleClass}>{roleLabel}</span>
             <button className="btn btn-ghost" onClick={logout}><IconLogout size={16} /> Log out</button>
           </div>
         </header>
-        {section === 'dashboard' && <DashboardPage />}
+        {section === 'dashboard' && <DashboardPage onNavigate={(s) => setSection(s as Section)} />}
         {section === 'skills' && <SkillsRolesPage />}
         {section === 'learning' && <LearningPage />}
         {section === 'assessments' && <AssessmentsPage />}
@@ -79,6 +89,8 @@ function Shell() {
 }
 
 export default function App() {
+  const m = window.location.pathname.match(/^\/p\/(\d+)/)
+  if (m) return <PublicProfilePage studentId={Number(m[1])} />
   return (
     <AppProvider>
       <Shell />

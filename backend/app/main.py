@@ -57,6 +57,7 @@ def _assessment_difficulty(student, role, skill_id):
 @app.on_event("startup")
 def on_startup():
     from .database import DB_PATH
+    init_db()
     if not os.path.exists(DB_PATH):
         seed.seed()
 
@@ -114,13 +115,24 @@ def _upsert_university(country, university):
 
 
 def _own_student(user, student_id):
-    """Student endpoints are scoped to the owning student."""
+    """Student endpoints are scoped to the owning student. A company may read a
+    student only when that student targets one of the company's own roles; the
+    university view stays aggregate-only, so no individual records are reachable."""
     if user["role"] == "Student":
         student = models.get_student_by_user(user["id"])
         if not student or student["id"] != student_id:
             raise HTTPException(status_code=403, detail="Not allowed to access another student's data")
-    elif user["role"] not in ("Company", "University Admin"):
-        raise HTTPException(status_code=403, detail="Not allowed")
+        return
+    if user["role"] == "Company":
+        student = models.get_student(student_id)
+        if not student or not student.get("target_role"):
+            raise HTTPException(status_code=403, detail="Not allowed to access this student's data")
+        company = models.get_company_by_user(user["id"])
+        role = student["target_role"]
+        if not company or not role or role.get("company_id") != company["id"]:
+            raise HTTPException(status_code=403, detail="Not allowed to access this student's data")
+        return
+    raise HTTPException(status_code=403, detail="Not allowed")
 
 
 def _own_company_role(user, role_id):
@@ -387,11 +399,19 @@ def api_catalog_roles(request: Request):
 
 @app.get("/api/roles/{role_id}")
 def api_get_role(role_id: int, request: Request):
-    _current_user(request)
+    """Catalog roles are public reference data; a company may read only its own
+    role definitions, never another company's."""
+    user = _current_user(request)
     role = models.get_role(role_id)
     if not role:
         raise HTTPException(status_code=404, detail="Role not found")
-    return role
+    if role.get("is_reference"):
+        return role
+    if user["role"] == "Company":
+        company = models.get_company_by_user(user["id"])
+        if company and role.get("company_id") == company["id"]:
+            return role
+    raise HTTPException(status_code=403, detail="Not allowed to view this role")
 
 
 @app.post("/api/roles")
@@ -498,8 +518,14 @@ def api_role_skill_coverage(role_id: int, request: Request):
 
 @app.get("/api/students")
 def api_list_students(request: Request):
-    _current_user(request)
-    return models.list_students()
+    """Anonymized cohort index for the university dashboard only — never names
+    or emails, and no access for students/companies."""
+    user = _current_user(request)
+    _require_roles(user, "University Admin")
+    return [{"id": s["id"], "university": s["university"],
+             "target_role_id": s.get("target_role_id"),
+             "cohort_confirmed": bool(s.get("cohort_confirmed"))}
+            for s in models.list_students()]
 
 
 @app.get("/api/students/{student_id}")
@@ -517,7 +543,7 @@ def api_update_student(student_id: int, request: Request, body: dict):
     user = _current_user(request)
     _own_student(user, student_id)
     fields = {k: v for k, v in body.items() if k in
-              ("name", "email", "university", "target_role_id", "cv_filename")}
+              ("name", "email", "university", "target_role_id", "cv_filename", "share_public")}
     return models.update_student(student_id, **fields)
 
 
@@ -605,6 +631,22 @@ def api_get_learning(student_id: int, skill_id: int, request: Request):
     if not item:
         raise HTTPException(status_code=404, detail="Learning item not found")
     return item
+
+
+@app.post("/api/students/{student_id}/learning/{skill_id}/progress")
+def api_save_learning_progress(student_id: int, skill_id: int, request: Request, body: dict):
+    """Persist which roadmap steps a student has completed for one skill."""
+    user = _current_user(request)
+    _own_student(user, student_id)
+    steps = []
+    for s in body.get("steps") or []:
+        try:
+            num = int(s)
+        except (TypeError, ValueError):
+            continue
+        if num > 0:
+            steps.append(num)
+    return models.update_learning_progress(student_id, skill_id, steps)
 
 
 # ------------------------------------------------------------------ AI tutor
@@ -742,6 +784,30 @@ def api_list_assessments(student_id: int, request: Request):
     user = _current_user(request)
     _own_student(user, student_id)
     return models.list_assessment_attempts(student_id=student_id)
+
+
+# ------------------------------------------------------------------ public verified-skills profile
+
+@app.get("/api/public/verified/{student_id}")
+def api_public_verified(student_id: int):
+    """Read-only, no-auth snapshot of a student's VERIFIED skills. Only served
+    when the student has explicitly enabled sharing; verification evidence is
+    the assessment-pass date, never self-reported claims."""
+    student = models.get_student(student_id)
+    if not student or not student.get("share_public"):
+        raise HTTPException(status_code=404, detail="Profile not shared")
+    role = student.get("target_role")
+    return {
+        "student_id": student["id"],
+        "name": student["name"],
+        "university": student["university"],
+        "target_role": {"title": role["title"], "company": role.get("company_name")} if role else None,
+        "verified_skills": [
+            {"skill_id": v["skill_id"], "name": v["name"], "category": v.get("category"),
+             "level": v["level"], "verified_at": v.get("verified_at")}
+            for v in student["verified_skills"]
+        ],
+    }
 
 
 # ------------------------------------------------------------------ university

@@ -265,7 +265,7 @@ def create_student(name, email, university, user_id=None):
 
 
 def update_student(student_id, **fields):
-    allowed = {"name", "email", "university", "target_role_id", "cv_filename", "cohort_confirmed"}
+    allowed = {"name", "email", "university", "target_role_id", "cv_filename", "cohort_confirmed", "share_public"}
     sets, vals = [], []
     for k, v in fields.items():
         if k in allowed and v is not None:
@@ -311,7 +311,7 @@ def list_learning_path(student_id):
     with get_cursor() as c:
         rows = c.execute("""
             SELECT l.id, l.student_id, l.skill_id, s.name AS skill_name, s.category,
-                   l.explanation, l.practice_exercise, l.mini_project, l.resources, l.roadmap, l.generated_at
+                   l.explanation, l.practice_exercise, l.mini_project, l.resources, l.roadmap, l.progress, l.generated_at
             FROM learning_path_items l JOIN skills s ON s.id=l.skill_id
             WHERE l.student_id=? ORDER BY s.name""", (student_id,)).fetchall()
         out = []
@@ -319,6 +319,7 @@ def list_learning_path(student_id):
             d = _row(r)
             d["resources"] = _json_loads(d.get("resources"))
             d["roadmap"] = _json_loads(d.get("roadmap"))
+            d["progress"] = _json_loads(d.get("progress")) or []
             out.append(d)
         return out
 
@@ -327,7 +328,7 @@ def get_learning_item(student_id, skill_id):
     with get_cursor() as c:
         r = c.execute("""
             SELECT l.id, l.student_id, l.skill_id, s.name AS skill_name, s.category,
-                   l.explanation, l.practice_exercise, l.mini_project, l.resources, l.roadmap, l.generated_at
+                   l.explanation, l.practice_exercise, l.mini_project, l.resources, l.roadmap, l.progress, l.generated_at
             FROM learning_path_items l JOIN skills s ON s.id=l.skill_id
             WHERE l.student_id=? AND l.skill_id=?""", (student_id, skill_id)).fetchone()
         if not r:
@@ -335,6 +336,7 @@ def get_learning_item(student_id, skill_id):
         d = _row(r)
         d["resources"] = _json_loads(d.get("resources"))
         d["roadmap"] = _json_loads(d.get("roadmap"))
+        d["progress"] = _json_loads(d.get("progress")) or []
         return d
 
 
@@ -352,6 +354,14 @@ def upsert_learning_item(student_id, skill_id, explanation, practice_exercise, m
                        generated_at=datetime('now')""",
                   (student_id, skill_id, explanation, practice_exercise, mini_project,
                    _json_dumps(resources), _json_dumps(roadmap)))
+        return get_learning_item(student_id, skill_id)
+
+
+def update_learning_progress(student_id, skill_id, steps):
+    """Persist the completed roadmap step numbers for a learning item."""
+    with get_cursor() as c:
+        c.execute("UPDATE learning_path_items SET progress=? WHERE student_id=? AND skill_id=?",
+                  (_json_dumps(sorted(set(steps))), student_id, skill_id))
         return get_learning_item(student_id, skill_id)
 
 
