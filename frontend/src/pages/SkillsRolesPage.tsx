@@ -5,6 +5,7 @@ import type { RoleRecord, Student, Skill, RolesResponse } from '../lib/types'
 import { IconPlus, IconEdit, IconTrash, IconUpload, IconSearch, IconCheck } from '../components/Icons'
 import { SkillTag } from '../components/widgets'
 import { IconRoles } from '../components/Icons'
+import { ConfirmModal, ToastRegion, useToast } from '../components/ui'
 
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced']
 
@@ -68,31 +69,51 @@ function StudentBrowse({ student }: { student?: Student }) {
   const [selectedRole, setSelectedRole] = useState<number | null>(student?.target_role_id ?? null)
   const [uploading, setUploading] = useState(false)
   const [cvMsg, setCvMsg] = useState('')
+  const [cvErr, setCvErr] = useState('')
+  const [suggestOnly, setSuggestOnly] = useState(false)
+  const toast = useToast()
 
   const all = [...roles, ...catalog]
-  const filtered = all.filter(
-    (r) =>
+  const cvSkillNames = (student?.self_reported_skills || [])
+    .map((s) => s.name.toLowerCase().trim())
+    .filter(Boolean)
+
+  // Rank roles by overlap with the student's CV-extracted skills.
+  const ranked = all.map((r) => {
+    const score = r.required_skills.reduce((n, s) => n + (cvSkillNames.includes(s.name.toLowerCase().trim()) ? 1 : 0), 0)
+    return { r, score }
+  }).sort((a, b) => (b.score - a.score) || (a.r.title.localeCompare(b.r.title)))
+
+  const filtered = ranked.filter(({ r, score }) => {
+    const matchSearch =
       r.title.toLowerCase().includes(q.toLowerCase()) ||
-      (r.company_name || '').toLowerCase().includes(q.toLowerCase()),
-  )
+      (r.company_name || '').toLowerCase().includes(q.toLowerCase())
+    if (!matchSearch) return false
+    if (suggestOnly) return score > 0
+    return true
+  })
+
+  const noCvSkills = cvSkillNames.length === 0
 
   const chooseTarget = async (roleId: number) => {
     if (!student) return
     await api.updateStudent(student.id, { target_role_id: roleId })
     setSelectedRole(roleId)
     await refreshStudent()
+    toast.push('Target career updated.', 'success')
   }
 
   const onUpload = async (file: File | undefined) => {
     if (!file || !student) return
     setUploading(true)
-    setCvMsg('')
+    setCvMsg(''); setCvErr('')
     try {
       const res = await api.uploadCv(student.id, file)
       setCvMsg(`Extracted ${res.extracted.length} skills from "${file.name}". These are shown as self-reported until verified by an assessment.`)
+      toast.push(`Extracted ${res.extracted.length} skills from your CV.`)
       await refreshStudent()
     } catch (e: any) {
-      setCvMsg('Upload failed: ' + e.message)
+      setCvErr(e.message || 'Upload failed')
     } finally {
       setUploading(false)
     }
@@ -110,7 +131,8 @@ function StudentBrowse({ student }: { student?: Student }) {
             </label>
           </div>
           {student?.cv_filename && <p className="small muted mb">CV on file: {student.cv_filename}</p>}
-          {cvMsg && <p className="small" style={{ color: cvMsg.startsWith('Extracted') ? 'var(--green)' : 'var(--red)' }}>{cvMsg}</p>}
+          {cvMsg && <p className="small" style={{ color: 'var(--green)' }}>{cvMsg}</p>}
+          {cvErr && <p className="small" style={{ color: 'var(--red)' }}>{cvErr}</p>}
           <div className="divider" />
           <p className="small muted mb">Self-reported profile (extracted from CV by GenAI, unverified)</p>
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8 }}>
@@ -132,14 +154,24 @@ function StudentBrowse({ student }: { student?: Student }) {
       </div>
 
       <div className="card">
-        <h3>Available roles</h3>
+        <div className="flex between" style={{ flexWrap: 'wrap', gap: 10 }}>
+          <h3>Available roles</h3>
+          <button
+            className="chip-btn"
+            onClick={() => setSuggestOnly((s) => !s)}
+            disabled={noCvSkills}
+            title={noCvSkills ? 'Upload a CV first to get recommendations' : 'Show only roles matching your CV skills'}
+          >
+            <IconSearch size={13} /> {suggestOnly ? 'Showing recommended…' : noCvSkills ? 'Recommended needs a CV' : 'Suggested for your skills'}
+          </button>
+        </div>
         <p className="card-sub">Select one as your Target Career to see your gap map and match score. Catalog roles are reference skill profiles you can aim at.</p>
         <div className="searchbar mb">
           <IconSearch size={16} />
           <input placeholder="Search roles or companies…" value={q} onChange={(e) => setQ(e.target.value)} />
         </div>
         <div className="stack">
-          {filtered.map((r) => (
+          {filtered.map(({ r }) => (
             <RoleCard
               key={r.id}
               r={r}
@@ -149,9 +181,10 @@ function StudentBrowse({ student }: { student?: Student }) {
               onSelect={() => chooseTarget(r.id)}
             />
           ))}
-          {filtered.length === 0 && <div className="empty">No roles match your search.</div>}
+          {filtered.length === 0 && <div className="empty">{suggestOnly ? 'No roles match your current CV skills. Try browsing all roles.' : 'No roles match your search.'}</div>}
         </div>
       </div>
+      <ToastRegion toasts={toast.toasts} dismiss={toast.dismiss} />
     </div>
   )
 }
@@ -161,6 +194,9 @@ function CompanyRoles({ company }: { company?: any }) {
   const { roles, setRoles, skills, loaded } = useRoles()
   const [editing, setEditing] = useState<any>(null)
   const [showForm, setShowForm] = useState(false)
+  const [confirmRole, setConfirmRole] = useState<RoleRecord | null>(null)
+  const [deleting, setDeleting] = useState(false)
+  const toast = useToast()
 
   const refresh = () => api.roles().then((res) => setRoles(res.roles))
   useEffect(() => { if (!loaded) refresh() }, [loaded])
@@ -193,15 +229,27 @@ function CompanyRoles({ company }: { company?: any }) {
       await api.createRole(body)
       setShowForm(false)
       refresh()
+      toast.push('Role saved successfully.')
     } catch (err: any) {
-      alert(err.message)
+      toast.push(err.message || 'Failed to save role', 'error')
     }
   }
 
-  const removeRole = async (id: number) => {
-    if (!confirm('Delete this role? Students currently targeting it will lose their target.')) return
-    await api.deleteRole(id)
-    refresh()
+  const askRemove = (r: RoleRecord) => setConfirmRole(r)
+
+  const removeRole = async () => {
+    if (!confirmRole) return
+    setDeleting(true)
+    try {
+      await api.deleteRole(confirmRole.id)
+      setConfirmRole(null)
+      refresh()
+      toast.push('Role deleted.')
+    } catch (err: any) {
+      toast.push(err.message || 'Failed to delete role', 'error')
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const changeRow = (i: number, patch: any) => {
@@ -266,7 +314,7 @@ function CompanyRoles({ company }: { company?: any }) {
               </div>
               <div className="rc-actions">
                 <button className="btn btn-sm" onClick={() => openEdit(r)}><IconEdit size={14} /> Edit</button>
-                <button className="btn btn-sm btn-danger" onClick={() => removeRole(r.id)}><IconTrash size={14} /></button>
+                <button className="btn btn-sm btn-danger" onClick={() => askRemove(r)}><IconTrash size={14} /></button>
               </div>
             </div>
             <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
@@ -277,6 +325,17 @@ function CompanyRoles({ company }: { company?: any }) {
           </div>
         ))}
       </div>
+
+      <ConfirmModal
+        open={!!confirmRole}
+        title="Delete this role?"
+        body={<>Delete <span className="modal-name">{confirmRole?.title}</span>? Students currently targeting this role will lose their target. This can't be undone.</>}
+        confirmLabel="Delete role"
+        busy={deleting}
+        onCancel={() => setConfirmRole(null)}
+        onConfirm={removeRole}
+      />
+      <ToastRegion toasts={toast.toasts} dismiss={toast.dismiss} />
     </div>
   )
 }

@@ -153,12 +153,27 @@ the same `npm start` — you never need them.
 
 All configuration is via environment variables — no secrets are committed.
 
+**`.env` file (recommended).** Copy `.env.example` to `.env` at the repo root and fill in
+values. The backend now loads this file automatically on startup, so you don't need to export
+anything by hand. Real shell environment variables always win over the file.
+
+```
+cp .env.example .env   # POSIX
+```
+On Windows PowerShell:
+```powershell
+Copy-Item .env.example .env
+# then edit .env to add keys, OR set for the session:
+$env:ANTHROPIC_API_KEY="..."
+```
+
 **GenAI** — the four touchpoints call a real provider when a key is set, and fall back to a
 clear deterministic generator otherwise:
 
 ```bash
 export ANTHROPIC_API_KEY=...   # or OPENAI_API_KEY=...
 ```
+PowerShell: `$env:ANTHROPIC_API_KEY="..."`
 
 **Google sign-in** (optional, else the demo provider is used):
 

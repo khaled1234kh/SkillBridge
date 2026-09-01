@@ -11,12 +11,36 @@ import json
 import os
 from pathlib import Path
 
+
+def _load_env():
+    """Load a repo-root .env if present. Real environment variables win.
+
+    The documented setup is 'copy .env.example to .env and add keys'; without a
+    loader here those keys were never read, so every GenAI feature silently ran
+    its deterministic fallback.
+    """
+    env_file = Path(__file__).resolve().parents[2] / ".env"
+    if not env_file.is_file():
+        return
+    for line in env_file.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key:
+            os.environ.setdefault(key, value)
+
+
+_load_env()
+
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request, BackgroundTasks
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 
-from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity
+from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity, jobs, career_roadmap
 from .database import init_db, get_cursor
 
 FRONTEND_DIST = os.environ.get(
@@ -33,11 +57,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 PASS_THRESHOLD = 70.0
 MIN_COHORT_SIZE = 5  # University stats rule: never compute a stat from fewer students
 VALID_SIGNUP_ROLES = ("Student", "Company", "University Admin")
-
-# Roles that need an entity record linked to the newly-created user.
 _ENTITY_ROLES = {"Student", "Company"}
 
 LEVELS = ["Beginner", "Intermediate", "Advanced"]
@@ -57,9 +80,14 @@ def _assessment_difficulty(student, role, skill_id):
 @app.on_event("startup")
 def on_startup():
     from .database import DB_PATH
-    init_db()
     if not os.path.exists(DB_PATH):
+        # seed.seed() creates the schema AND the reference data (universities,
+        # roles, catalog, demo accounts) — it must run on a truly fresh DB,
+        # which means checking BEFORE init_db() ever touches the file.
         seed.seed()
+    else:
+        # Existing databases are only migrated so their new columns appear.
+        init_db()
 
 
 # ------------------------------------------------------------------ auth helpers
@@ -270,17 +298,25 @@ def google_complete(body: dict):
     """Second step of Google signup: pick a role; the backend creates the account."""
     sub = (body.get("google_sub") or "").strip()
     role = body.get("role")
+    country = (body.get("country") or "").strip()
+    university = (body.get("university") or "").strip()
+    industry = (body.get("industry") or "").strip()
     if not sub or role not in VALID_SIGNUP_ROLES:
         raise HTTPException(status_code=400, detail="google_sub and a valid role are required")
+    if role == "University Admin" and not (country and university):
+        raise HTTPException(status_code=400, detail="University Admins must choose a country and university")
     reg = models.get_google_registration(sub)
     if not reg:
         raise HTTPException(status_code=404, detail="No pending Google registration")
     user = models.create_user(reg["email"], role, reg["display_name"],
-                              auth_provider="google", google_sub=sub, verified=1)
+                              auth_provider="google", google_sub=sub, verified=1,
+                              country=country, university=university)
     if role == "Student":
-        models.create_student(reg["display_name"], reg["email"], "", user_id=user["id"])
+        models.create_student(reg["display_name"], reg["email"], university, user_id=user["id"])
     elif role == "Company":
-        models.create_company(reg["display_name"], "", user_id=user["id"])
+        models.create_company(reg["display_name"], industry, user_id=user["id"])
+    if country and university:
+        _upsert_university(country, university)
     models.delete_google_registration(sub)
     sess = models.create_session(user["id"])
     return {"token": sess, **_entity_bundle(user)}
@@ -649,6 +685,25 @@ def api_save_learning_progress(student_id: int, skill_id: int, request: Request,
     return models.update_learning_progress(student_id, skill_id, steps)
 
 
+@app.get("/api/students/{student_id}/career-roadmap")
+def api_get_career_roadmap(student_id: int, request: Request):
+    """Full start-to-finish career roadmap for the student's target role.
+    Stored per (student, role); regenerated if the role changed."""
+    user = _current_user(request)
+    _own_student(user, student_id)
+    student = models.get_student(student_id)
+    role = student.get("target_role") if student else None
+    if not role:
+        return {"role_title": None, "phases": [], "phase_count": 0,
+                "summary": "Choose a target role on the Skills & Roles page first."}
+    saved = models.get_career_roadmap(student_id, role["id"])
+    if saved:
+        return saved["roadmap"]
+    roadmap = career_roadmap.build_career_roadmap(student, role)
+    models.upsert_career_roadmap(student_id, role["id"], roadmap)
+    return roadmap
+
+
 # ------------------------------------------------------------------ AI tutor
 
 @app.get("/api/students/{student_id}/tutor")
@@ -784,6 +839,36 @@ def api_list_assessments(student_id: int, request: Request):
     user = _current_user(request)
     _own_student(user, student_id)
     return models.list_assessment_attempts(student_id=student_id)
+
+
+# ------------------------------------------------------------------ recent jobs
+
+@app.get("/api/jobs/recent")
+def api_recent_jobs(request: Request, limit: int = 10):
+    """Real, recent job postings matched + ranked (most → least fitting) to the
+    signed-in student's skills, target role, and country. Live multi-source feed
+    with a short cache; curated offline fallback when feeds are unreachable."""
+    user = _current_user(request)
+    skills = []
+    context = {"country": user.get("country") or "", "role": ""}
+    if user["role"] == "Student":
+        student = models.get_student_by_user(user["id"])
+        if student:
+            for s in student.get("self_reported_skills") or []:
+                skills.append((s["name"], s.get("level") or "Beginner"))
+            for v in student.get("verified_skills") or []:
+                skills.append((v["name"], v.get("level") or "Intermediate"))
+            role = (student.get("target_role") or {}).get("title")
+            context["role"] = role or ""
+            if student.get("university"):
+                # derive a likely country from their university if no user country
+                pass
+    elif user["role"] == "Company":
+        # Companies see general recent openings so they can gauge the market.
+        context["role"] = ""
+    return jobs.recent_jobs(skills=skills, role=context["role"],
+                            country=context["country"],
+                            limit=min(max(int(limit), 1), 16))
 
 
 # ------------------------------------------------------------------ public verified-skills profile

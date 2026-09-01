@@ -11,9 +11,33 @@ import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity,
 
 type Section = 'dashboard' | 'skills' | 'learning' | 'assessments' | 'university'
 
+function NotFound() {
+  return (
+    <div className="app-shell">
+      <main className="content notfound-wrap">
+        <div className="notfound">
+          <div className="nf-code">404</div>
+          <h1>Page not found</h1>
+          <p>The page you're looking for doesn't exist or was moved.</p>
+          <button className="btn btn-primary" onClick={() => { window.location.href = '/' }}>Back to SkillBridge</button>
+        </div>
+      </main>
+    </div>
+  )
+}
+
 function Shell() {
   const { session, me, logout } = useApp()
   const [section, setSection] = React.useState<Section>('dashboard')
+  const [navOpen, setNavOpen] = React.useState(false)
+
+  const titles: Record<Section, string> = {
+    dashboard: 'Dashboard', skills: 'Skills & Roles', learning: 'Learning',
+    assessments: 'Assessments', university: 'University Dashboard',
+  }
+  React.useEffect(() => {
+    document.title = `${titles[section]} · SkillBridge`
+  }, [section])
 
   if (!session) return <LoginPage />
 
@@ -28,10 +52,7 @@ function Shell() {
   const visibleNav = nav.filter((n) => n.show)
   if (!visibleNav.some((n) => n.key === section)) setSection(visibleNav[0]?.key || 'dashboard')
 
-  const titles: Record<Section, string> = {
-    dashboard: 'Dashboard', skills: 'Skills & Roles', learning: 'Learning',
-    assessments: 'Assessments', university: 'University Dashboard',
-  }
+  const goTo = (key: Section) => { setSection(key); setNavOpen(false) }
 
   const roleLabel =
     role === 'Student'
@@ -43,17 +64,20 @@ function Shell() {
 
   return (
     <div className="app-shell">
-      <aside className="sidebar">
-        <div className="brand-block">
+      <a className="skip-link" href="#main-content">Skip to content</a>
+      <aside className={`sidebar ${navOpen ? 'nav-open' : ''}`}>
+        <div className="brand-block" onClick={() => goTo('dashboard')} role="button" tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') goTo('dashboard') }}>
           <div className="brand-mark">S</div>
           <div>
             <div className="eyebrow">Career Intelligence</div>
             <h1>SkillBridge</h1>
           </div>
         </div>
+        <button className="nav-close" aria-label="Close menu" onClick={() => setNavOpen(false)}>✕</button>
         <nav className="main-nav">
           {visibleNav.map((n) => (
-            <button key={n.key} className={`nav-item ${section === n.key ? 'active' : ''}`} onClick={() => setSection(n.key)}>
+            <button key={n.key} className={`nav-item ${section === n.key ? 'active' : ''}`} onClick={() => goTo(n.key)}>
               {n.icon} {n.label}
             </button>
           ))}
@@ -67,11 +91,15 @@ function Shell() {
           </div>
         </div>
       </aside>
-      <main className="content">
+      <div className="nav-backdrop" onClick={() => setNavOpen(false)} />
+      <main className="content" id="main-content">
         <header className="topbar">
           <div>
-            <p className="eyebrow">Verified skill loop</p>
-            <h2>{titles[section]}</h2>
+            <button className="nav-toggle" aria-label="Open menu" onClick={() => setNavOpen(true)}>☰</button>
+            <div>
+              <p className="eyebrow">Verified skill loop</p>
+              <h2>{titles[section]}</h2>
+            </div>
           </div>
           <div className="topbar-actions">
             <span className={roleClass}>{roleLabel}</span>
@@ -83,6 +111,10 @@ function Shell() {
         {section === 'learning' && <LearningPage />}
         {section === 'assessments' && <AssessmentsPage />}
         {section === 'university' && <UniversityPage />}
+        <footer className="app-footer">
+          <span>SkillBridge · Career Intelligence Platform</span>
+          <span>© {new Date().getFullYear()} SkillBridge. All rights reserved.</span>
+        </footer>
       </main>
     </div>
   )
@@ -91,6 +123,7 @@ function Shell() {
 export default function App() {
   const m = window.location.pathname.match(/^\/p\/(\d+)/)
   if (m) return <PublicProfilePage studentId={Number(m[1])} />
+  if (window.location.pathname.startsWith('/p/')) return <NotFound />
   return (
     <AppProvider>
       <Shell />

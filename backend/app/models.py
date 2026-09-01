@@ -362,7 +362,29 @@ def update_learning_progress(student_id, skill_id, steps):
     with get_cursor() as c:
         c.execute("UPDATE learning_path_items SET progress=? WHERE student_id=? AND skill_id=?",
                   (_json_dumps(sorted(set(steps))), student_id, skill_id))
-        return get_learning_item(student_id, skill_id)
+    return get_learning_item(student_id, skill_id)
+
+
+def get_career_roadmap(student_id, role_id):
+    with get_cursor() as c:
+        row = c.execute("SELECT * FROM career_roadmaps WHERE student_id=? AND role_id=?",
+                        (student_id, role_id)).fetchone()
+        if not row:
+            return None
+        d = _row(row)
+        d["roadmap"] = _json_loads(d["roadmap"])
+        return d
+
+
+def upsert_career_roadmap(student_id, role_id, roadmap):
+    with get_cursor() as c:
+        c.execute("""INSERT INTO career_roadmaps (student_id, role_id, roadmap)
+                     VALUES (?,?,?)
+                     ON CONFLICT(student_id, role_id) DO UPDATE SET
+                       roadmap=excluded.roadmap,
+                       generated_at=datetime('now')""",
+                  (student_id, role_id, _json_dumps(roadmap)))
+    return get_career_roadmap(student_id, role_id)
 
 
 # ---------------------------------------------------------------- tutor

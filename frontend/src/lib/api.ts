@@ -1,7 +1,7 @@
 import type {
-  ActivitySummary, Analysis, AssessmentAttempt, Candidate, CohortResponse, Company, GeneratedAssessment,
+  ActivitySummary, Analysis, AssessmentAttempt, Candidate, CareerRoadmap, CohortResponse, Company, GeneratedAssessment,
   GoogleConfig, LearningItem, QuizQuestion, PublicProfile, RoleRecord, RolesResponse, RoleSkillCoverage, Skill, Student,
-  Session, TutorMessage, UniversityStatsResponse, UniversityOption,
+  Session, TutorMessage, UniversityStatsResponse, UniversityOption, RecentJob,
 } from './types'
 
 const BASE = ''
@@ -54,8 +54,8 @@ export const api = {
   googleConfig: () => req<GoogleConfig>('/api/auth/google/config'),
   googleDemo: (email: string, display_name: string) =>
     req<any>('/api/auth/google/demo', { method: 'POST', body: JSON.stringify({ email, display_name }) }),
-  googleComplete: (google_sub: string, role: string) => {
-    const p = req<any>('/api/auth/google/complete', { method: 'POST', body: JSON.stringify({ google_sub, role }) })
+  googleComplete: (google_sub: string, role: string, opts?: { university?: string; country?: string; industry?: string }) => {
+    const p = req<any>('/api/auth/google/complete', { method: 'POST', body: JSON.stringify({ google_sub, role, university: opts?.university, country: opts?.country, industry: opts?.industry }) })
     return p.then((s) => { setToken(s.token); return s })
   },
   resetRequest: (email: string) =>
@@ -122,4 +122,10 @@ export const api = {
   universityStats: () => req<UniversityStatsResponse>('/api/university/stats'),
   universityCohort: () => req<CohortResponse>('/api/university/cohort'),
   universityConfirm: () => req<CohortResponse>('/api/university/cohort/confirm', { method: 'POST', body: JSON.stringify({ confirm: true }) }),
+
+  // ---- recent jobs
+  recentJobs: () => req<{ source: 'live' | 'fallback'; jobs: RecentJob[] }>('/api/jobs/recent'),
+
+  // ---- full career roadmap
+  careerRoadmap: (studentId: number) => req<CareerRoadmap>(`/api/students/${studentId}/career-roadmap`),
 }

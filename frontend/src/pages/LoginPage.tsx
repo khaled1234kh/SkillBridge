@@ -3,6 +3,7 @@ import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import type { GoogleConfig, UniversityOption } from '../lib/types'
 import { IconUser, IconGoogle, IconShield, IconUniversity, IconCheck, IconAlert } from '../components/Icons'
+import { PasswordInput, ToastRegion, useToast } from '../components/ui'
 
 type Mode = 'signin' | 'signup' | 'reset' | 'google-role' | 'google-demo'
 
@@ -57,12 +58,14 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [busy, setBusy] = useState(false)
+  const [fieldErrs, setFieldErrs] = useState<Record<string, string>>({})
+  const toast = useToast()
 
   useEffect(() => {
     api.universities().then(setUniversities).catch(() => {})
   }, [])
 
-  const switchMode = (m: Mode) => { setMode(m); setError(''); setInfo(''); setVerifyNotice('') }
+  const switchMode = (m: Mode) => { setMode(m); setError(''); setInfo(''); setVerifyNotice(''); setFieldErrs({}) }
 
   const selectedCountryUnis = () => {
     const g = universities.find((x) => x.country === country)
@@ -71,7 +74,13 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
 
   const doLogin = async (e?: React.FormEvent) => {
     e?.preventDefault()
-    setError(''); setBusy(true)
+    setError('')
+    const errs: Record<string, string> = {}
+    if (!email.trim()) errs.email = 'Please enter your email.'
+    if (!password) errs.password = 'Please enter your password.'
+    setFieldErrs(errs)
+    if (Object.keys(errs).length) return
+    setBusy(true)
     try { await login(email.trim(), password) }
     catch (err: any) { setError(err.message || 'Login failed') }
     finally { setBusy(false) }
@@ -79,12 +88,21 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
 
   const doSignup = async (e?: React.FormEvent) => {
     e?.preventDefault()
-    setError(''); setVerifyNotice(''); setBusy(true)
+    setError(''); setVerifyNotice('')
+    const errs: Record<string, string> = {}
+    if (!displayName.trim()) errs.displayName = 'Please enter your full name.'
+    if (!/^\S+@\S+\.\S+$/.test(email.trim())) errs.email = 'Enter a valid email address.'
+    if (password.length < 8) errs.password = 'Password must be at least 8 characters.'
+    if (role === 'Company' && !industry.trim()) errs.industry = 'Please enter your industry.'
+    setFieldErrs(errs)
+    if (Object.keys(errs).length) return
+    setBusy(true)
     try {
       const uniChosen = role === 'Student' || role === 'University Admin'
       const uni = university === '__other__' ? customUniversity.trim() : university
       const res = await signup(email.trim(), password, displayName.trim(), role,
         uniChosen ? uni : undefined, uniChosen ? country : undefined, role === 'Company' ? industry.trim() : undefined)
+      toast.push('Account created successfully.', 'success')
       if (res.email_verified_delivery) {
         // SMTP is configured: the user must verify their email before using the account.
         setVerifyNotice(`A verification email was sent to ${email.trim()}. Please click the link in it to activate your account.`)
@@ -111,6 +129,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
     try {
       await api.resetConfirm(resetToken.trim(), password)
       setInfo('Password updated. Sign in with your new password.')
+      toast.push('Password updated successfully.', 'success')
       setMode('signin')
     } catch (err: any) { setError(err.message) }
     finally { setBusy(false) }
@@ -137,9 +156,17 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
 
   const doGoogleRole = async (e?: React.FormEvent) => {
     e?.preventDefault()
-    setError(''); setBusy(true)
+    setError('')
+    const errs: Record<string, string> = {}
+    if ((role === 'Student' || role === 'University Admin') && !country) errs.country = 'Please choose a country.'
+    if ((role === 'Student' || role === 'University Admin') && !university) errs.university = 'Please choose a university.'
+    if (role === 'Company' && !industry.trim()) errs.industry = 'Please enter your industry.'
+    setFieldErrs(errs)
+    if (Object.keys(errs).length) return
+    setBusy(true)
     try {
-      await api.googleComplete(pending.google_sub, role)
+      const uni = university === '__other__' ? customUniversity.trim() : university
+      await api.googleComplete(pending.google_sub, role, { university: uni, country, industry: industry.trim() })
       window.location.reload()
     } catch (err: any) { setError(err.message) }
     finally { setBusy(false) }
@@ -161,11 +188,13 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
       )}
 
       {mode === 'signin' && (
-        <form onSubmit={doLogin}>
-          <div className="field"><label>Email</label>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" placeholder="you@example.com" /></div>
-          <div className="field"><label>Password</label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="current-password" /></div>
+        <form onSubmit={doLogin} noValidate>
+          <div className={`field ${fieldErrs.email ? 'invalid' : ''}`}><label>Email</label>
+            <input value={email} onChange={(e) => { setEmail(e.target.value); if (fieldErrs.email) setFieldErrs((f) => ({ ...f, email: '' })) }} autoComplete="email" placeholder="you@example.com" />
+            {fieldErrs.email && <span className="field-err">{fieldErrs.email}</span>}</div>
+          <div className={`field ${fieldErrs.password ? 'invalid' : ''}`}><label>Password</label>
+            <PasswordInput value={password} onChange={(v) => { setPassword(v); if (fieldErrs.password) setFieldErrs((f) => ({ ...f, password: '' })) }} autoComplete="current-password" />
+            {fieldErrs.password && <span className="field-err">{fieldErrs.password}</span>}</div>
           {error && <div className="error">{error}</div>}
           <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
             <IconUser size={15} /> {busy ? 'Signing in…' : 'Sign in'}
@@ -181,13 +210,16 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
       )}
 
       {mode === 'signup' && (
-        <form onSubmit={doSignup}>
-          <div className="field"><label>Full name</label>
-            <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} autoComplete="name" /></div>
-          <div className="field"><label>Email</label>
-            <input value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" /></div>
-          <div className="field"><label>Password <span className="muted small">(8+ characters)</span></label>
-            <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" /></div>
+        <form onSubmit={doSignup} noValidate>
+          <div className={`field ${fieldErrs.displayName ? 'invalid' : ''}`}><label>Full name</label>
+            <input value={displayName} onChange={(e) => { setDisplayName(e.target.value); if (fieldErrs.displayName) setFieldErrs((f) => ({ ...f, displayName: '' })) }} autoComplete="name" />
+            {fieldErrs.displayName && <span className="field-err">{fieldErrs.displayName}</span>}</div>
+          <div className={`field ${fieldErrs.email ? 'invalid' : ''}`}><label>Email</label>
+            <input value={email} onChange={(e) => { setEmail(e.target.value); if (fieldErrs.email) setFieldErrs((f) => ({ ...f, email: '' })) }} autoComplete="email" />
+            {fieldErrs.email && <span className="field-err">{fieldErrs.email}</span>}</div>
+          <div className={`field ${fieldErrs.password ? 'invalid' : ''}`}><label>Password <span className="muted small">(8+ characters)</span></label>
+            <PasswordInput value={password} onChange={(v) => { setPassword(v); if (fieldErrs.password) setFieldErrs((f) => ({ ...f, password: '' })) }} autoComplete="new-password" />
+            {fieldErrs.password && <span className="field-err">{fieldErrs.password}</span>}</div>
           <div className="field">
             <label>I am a…</label>
             <select value={role} onChange={(e) => { setRole(e.target.value); setCountry(''); setUniversity(''); setCustomUniversity('') }}>
@@ -224,8 +256,9 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
             </div>
           )}
           {role === 'Company' && (
-            <div className="field"><label>Industry</label>
-              <input value={industry} onChange={(e) => setIndustry(e.target.value)} placeholder="AI / Software" /></div>
+            <div className={`field ${fieldErrs.industry ? 'invalid' : ''}`}><label>Industry</label>
+              <input value={industry} onChange={(e) => { setIndustry(e.target.value); if (fieldErrs.industry) setFieldErrs((f) => ({ ...f, industry: '' })) }} placeholder="AI / Software" />
+              {fieldErrs.industry && <span className="field-err">{fieldErrs.industry}</span>}</div>
           )}
           {verifyNotice && <div className="info" style={{ whiteSpace: 'normal' }}><IconShield size={15} /> {verifyNotice}</div>}
           {error && <div className="error">{error}</div>}
@@ -245,7 +278,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
           {resetToken && (
             <>
               <div className="field"><label>New password</label>
-                <input type="password" value={password} onChange={(e) => setPassword(e.target.value)} autoComplete="new-password" /></div>
+                <PasswordInput value={password} onChange={setPassword} autoComplete="new-password" /></div>
               <div className="info"><IconShield size={15} /> Your reset token: <code>{resetToken.slice(0, 12)}…</code></div>
             </>
           )}
@@ -274,15 +307,49 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
       )}
 
       {mode === 'google-role' && (
-        <form onSubmit={doGoogleRole}>
+        <form onSubmit={doGoogleRole} noValidate>
           <div className="info">You're new here — pick the account type for <strong>{pending?.email}</strong>.</div>
           <div className="field"><label>I am a…</label>
-            <select value={role} onChange={(e) => setRole(e.target.value)}>
+            <select value={role} onChange={(e) => { setRole(e.target.value); setCountry(''); setUniversity(''); setCustomUniversity(''); setIndustry('') }}>
               <option value="Student">Student seeking roles</option>
               <option value="Company">Company hiring talent</option>
               <option value="University Admin">University administration</option>
             </select>
           </div>
+          {(role === 'Student' || role === 'University Admin') && (
+            <div className="university-picker">
+              <div className={`field ${fieldErrs.country ? 'invalid' : ''}`}>
+                <label>Country</label>
+                <select value={country} onChange={(e) => { setCountry(e.target.value); setUniversity(''); setCustomUniversity(''); if (fieldErrs.country) setFieldErrs((f) => ({ ...f, country: '' })) }}>
+                  <option value="">Select a country…</option>
+                  {universities.map((u) => <option key={u.country} value={u.country}>{u.country}</option>)}
+                </select>
+                {fieldErrs.country && <span className="field-err">{fieldErrs.country}</span>}
+              </div>
+              {country && (
+                <div className={`field ${fieldErrs.university ? 'invalid' : ''}`}>
+                  <label>University</label>
+                  <select value={university} onChange={(e) => { setUniversity(e.target.value); if (fieldErrs.university) setFieldErrs((f) => ({ ...f, university: '' })) }}>
+                    <option value="">Select a university…</option>
+                    {selectedCountryUnis().map((un) => <option key={un} value={un}>{un}</option>)}
+                    <option value="__other__">Other (not listed)</option>
+                  </select>
+                  {fieldErrs.university && <span className="field-err">{fieldErrs.university}</span>}
+                </div>
+              )}
+              {country && university === '__other__' && (
+                <div className="field">
+                  <label>University name</label>
+                  <input value={customUniversity} onChange={(e) => setCustomUniversity(e.target.value)} placeholder="Type your university…" />
+                </div>
+              )}
+            </div>
+          )}
+          {role === 'Company' && (
+            <div className={`field ${fieldErrs.industry ? 'invalid' : ''}`}><label>Industry</label>
+              <input value={industry} onChange={(e) => { setIndustry(e.target.value); if (fieldErrs.industry) setFieldErrs((f) => ({ ...f, industry: '' })) }} placeholder="AI / Software" />
+              {fieldErrs.industry && <span className="field-err">{fieldErrs.industry}</span>}</div>
+          )}
           {error && <div className="error">{error}</div>}
           <button className="btn btn-google" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
             <IconGoogle size={16} /> Create account
@@ -292,6 +359,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
           </div>
         </form>
       )}
+      <ToastRegion toasts={toast.toasts} dismiss={toast.dismiss} />
     </div>
   )
 }

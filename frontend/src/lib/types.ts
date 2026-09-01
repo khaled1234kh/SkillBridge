@@ -310,3 +310,39 @@ export interface PublicProfile {
   target_role: { title: string; company?: string } | null
   verified_skills: PublicVerifiedSkill[]
 }
+
+export interface RecentJob {
+  title: string
+  company: string
+  url: string
+  date?: string
+  tags?: string[]
+  location?: string
+  country?: string
+  source?: string
+  seniority?: string
+  match_pct?: number
+  match_reason?: string
+}
+
+export interface CareerRoadmapSkill {
+  name: string
+  category: string
+}
+
+export interface CareerRoadmapPhase {
+  phase: number
+  title: string
+  goal: string
+  skills: CareerRoadmapSkill[]
+  deliverables: string[]
+  checkpoint: string
+}
+
+export interface CareerRoadmap {
+  role_title: string | null
+  summary: string
+  student_starting_point?: number
+  phase_count: number
+  phases: CareerRoadmapPhase[]
+}

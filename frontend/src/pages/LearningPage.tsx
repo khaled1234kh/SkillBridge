@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react'
 import Markdown from 'react-markdown'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
-import type { Analysis, LearningItem, Student, TutorMessage } from '../lib/types'
+import type { Analysis, CareerRoadmap, LearningItem, Student, TutorMessage } from '../lib/types'
 import { GapPill } from '../components/widgets'
 import { IconChevron, IconChat, IconSend, IconAssessment, IconExternal, IconRoadmap, IconCheck } from '../components/Icons'
 
@@ -13,6 +13,14 @@ export default function LearningPage() {
   const [items, setItems] = useState<LearningItem[]>([])
   const [openId, setOpenId] = useState<number | null>(null)
   const [generating, setGenerating] = useState<number | null>(null)
+  const [showTop, setShowTop] = useState(false)
+
+  useEffect(() => {
+    const onScroll = () => setShowTop(window.scrollY > 600)
+    window.addEventListener('scroll', onScroll, { passive: true })
+    window.addEventListener('load', onScroll)
+    return () => { window.removeEventListener('scroll', onScroll); window.removeEventListener('load', onScroll) }
+  }, [])
 
   const load = async () => {
     try {
@@ -104,7 +112,13 @@ export default function LearningPage() {
           )}
         </div>
       </div>
+      <CareerRoadmapCard studentId={studentId} roleTitle={analysis?.role_title} />
       <ResourceCenter items={items} />
+      {showTop && (
+        <button className="btn back-top" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} aria-label="Back to top">
+          ↑ Back to top
+        </button>
+      )}
       <TutorPanel studentId={studentId} student={me?.student} items={items} />
     </div>
   )
@@ -218,6 +232,68 @@ function LearningRow({ gap, item, open, generating, onToggle, onGenerate, onTogg
   )
 }
 
+function CareerRoadmapCard({ studentId, roleTitle }: { studentId: number; roleTitle?: string }) {
+  const [map, setMap] = useState<CareerRoadmap | null>(null)
+  const [openPhase, setOpenPhase] = useState<number | null>(1)
+
+  useEffect(() => {
+    let alive = true
+    if (!studentId) return
+    api.careerRoadmap(studentId).then((r) => { if (alive) setMap(r) }).catch(() => { if (alive) setMap(null) })
+    return () => { alive = false }
+  }, [studentId])
+
+  if (!map || !map.phases.length) return null
+
+  return (
+    <div className="card mb cr-card">
+      <div className="cr-head">
+        <h3 style={{ margin: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <IconRoadmap size={17} /> Career Roadmap
+        </h3>
+        <span className="muted small">{map.phase_count} phases · {map.role_title || roleTitle || 'your target role'}</span>
+      </div>
+      <p className="card-sub cr-sub">{map.summary}</p>
+      <div className="cr-phases">
+        {map.phases.map((p) => {
+          const open = openPhase === p.phase
+          const skillTxt = [...new Set(p.skills.map((s) => s.name))].join(', ')
+          return (
+            <div className={`cr-phase ${open ? 'open' : ''}`} key={p.phase}>
+              <button className="cr-phase-head" onClick={() => setOpenPhase(open ? null : p.phase)}>
+                <span className="cr-phase-num">{p.phase}</span>
+                <span className="cr-phase-title">{p.title}</span>
+                <span className="cr-phase-shift">{open ? '▲' : '▼'}</span>
+              </button>
+              {open && (
+                <div className="cr-phase-body">
+                  <p className="cr-goal">{p.goal}</p>
+                  {skillTxt && (
+                    <div className="cr-skills">
+                      <span className="small muted">Develops:</span>
+                      {[...new Set(p.skills.map((s) => s.name))].map((n) => (
+                        <span className="chip-btn cr-chip" key={n}>{n}</span>
+                      ))}
+                    </div>
+                  )}
+                  <div className="cr-deliverables">
+                    <div className="cr-deliverable-title">Deliverables</div>
+                    {p.deliverables.map((d, i) => (
+                      <div className="cr-deliverable" key={i}><span className="rm-checkbox" style={{ background: 'var(--navy)', borderColor: 'var(--navy)' }}>{i + 1}</span>
+                        <div className="md-body"><Markdown>{d}</Markdown></div></div>
+                    ))}
+                  </div>
+                  <div className="cr-check"><strong>Checkpoint:</strong> {p.checkpoint}</div>
+                </div>
+              )}
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
 function ResourceCenter({ items }: { items: LearningItem[] }) {
   const [mode, setMode] = useState<'combined' | 'per-skill'>('combined')
   const all = items.flatMap((i) =>
@@ -262,12 +338,12 @@ function ResourceCenter({ items }: { items: LearningItem[] }) {
   })
 
   return (
-    <div className="card mb">
+    <div className="card mb rc-card">
       <div className="rc-head">
         <h3 style={{ margin: 0 }}>My Resources</h3>
         <span className="muted small">{unique.length} unique links across {skillCount} skills</span>
       </div>
-      <p className="card-sub">
+      <p className="card-sub rc-sub">
         The same source is legitimately reused across skills — this center dedupes it, so you see every link exactly once.
       </p>
       <div className="rc-toggle">

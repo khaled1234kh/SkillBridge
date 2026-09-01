@@ -482,19 +482,26 @@ def tutor_reply(question, student_context=None, skill_name=None, target_role=Non
     )
 
     def fallback():
+        q = (question or "").lower()
+        stops = {"your", "this", "that", "with", "from", "about", "would", "should", "what",
+                 "when", "where", "which", "want", "going", "good", "best", "tell", "help",
+                 "there", "their", "have", "just", "know", "like"}
+        words = [w for w in re.findall(r"[a-z][a-z0-9']*", q) if len(w) > 3 and w not in stops]
+        topic = ", ".join(sorted(set(words))[:4]) or (skill_name or "the core concepts")
         return (
-            f"Here's guidance on **{skill_name or 'this skill'}** for someone aiming to be a "
-            f"{target_role or 'developer'}. Since your background is "
+            f"You asked about **{topic}** — here's practical guidance for someone aiming to be "
+            f"a {target_role or 'developer'}. Since your background is "
             f"'{student_context or 'being built'}', start from where you are and push toward "
             f"hands-on fluency rather than theory.\n\n"
-            f"1. **Anchor to the role** — in a {target_role or 'technical'} job, {skill_name or 'this skill'} "
-            f"shows up in concrete daily tasks. Name the one deliverable related to it that a "
-            f"{target_role or 'person in that role'} would own, and use that as your target.\n"
-            f"2. **Practice in small loops** — work 20-30 minute sessions, each producing a small "
-            f"artifact (a runnable script, a config, a short write-up) so progress is visible.\n"
-            f"3. **Assess honestly** — when you feel ready, take the {skill_name or 'skill'} assessment "
-            f"to confirm you've actually closed the gap; let the result drive what you revise.\n\n"
-            f"What specific part of **{skill_name or 'this skill'}** would you like to dig into next?"
+            f"**Break it down** — {topic} in a {target_role or 'technical'} role shows up in a few "
+            f"concrete daily tasks. Name the single deliverable that would prove you can do it, "
+            f"and use that as your target.\n\n"
+            f"**Practice loop** — work 20-30 minute sessions, each producing a small artifact "
+            f"(a runnable script, a config, a short write-up) so progress stays visible.\n\n"
+            f"**Verify it** — when you feel ready, take the {skill_name or 'skill'} assessment; let "
+            f"the result tell you what to revise next.\n\n"
+            f"To go deeper on **{topic}**: what exactly are you trying to build, and which part "
+            f"is blocking you most right now?"
         )
 
     return complete(system, user, fallback=fallback())

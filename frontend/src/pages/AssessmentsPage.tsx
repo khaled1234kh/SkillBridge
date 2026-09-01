@@ -1,9 +1,10 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
-import type { Analysis, AssessmentAttempt, IntegrityFlag, QuizQuestion } from '../lib/types'
+import type { Analysis, AssessmentAttempt, IntegrityFlag, QuizQuestion, Skill } from '../lib/types'
 import { GapPill } from '../components/widgets'
 import { IconAssessment, IconAlert, IconFlag, IconCheck, IconTrophy, IconClock } from '../components/Icons'
+import { ToastRegion, useToast } from '../components/ui'
 
 function shuffle<T>(arr: T[]): T[] {
   const a = [...arr]
@@ -19,11 +20,14 @@ export default function AssessmentsPage() {
   const [analysis, setAnalysis] = useState<Analysis | null>(null)
   const [attempts, setAttempts] = useState<AssessmentAttempt[]>([])
   const [keepIds, setKeepIds] = useState<Set<number>>(new Set())
+  const [allSkills, setAllSkills] = useState<Skill[]>([])
+  const toast = useToast()
 
   useEffect(() => {
     if (me?.student?.id) {
       api.analysis(me.student.id).then(setAnalysis).catch(() => {})
       api.studentAssessments(me.student.id).then(setAttempts).catch(() => {})
+      api.skills().then(setAllSkills).catch(() => {})
     }
   }, [me])
 
@@ -34,29 +38,65 @@ export default function AssessmentsPage() {
   const keep = (id: number) => setKeepIds((prev) => { const n = new Set(prev); n.add(id); return n })
   const release = (id: number) => setKeepIds((prev) => { const n = new Set(prev); n.delete(id); return n })
 
+  // When there is no target role / no gaps, offer every known skill so a student
+  // can still verify something (this is the "assessment shows no skills" fix).
+  const gapSkillIds = new Set(allGaps.map((g) => g.skill_id))
+  const browseSkills = allSkills.filter((s) => !gapSkillIds.has(s.id) || !renderedGaps.find((g) => g.skill_id === s.id))
+  const showBrowse = viableSkills.length === 0 && allSkills.length > 0
+
+  const renderGap = (g: any) => {
+    const last = attempts.filter((a) => a.skill_id === g.skill_id).sort((a, b) => b.id - a.id)[0]
+    return (
+      <AssessmentStarter
+        key={g.skill_id}
+        gap={g}
+        lastAttempt={last}
+        onActivate={() => keep(g.skill_id)}
+        onDeactivate={() => release(g.skill_id)}
+        onDone={() => { refreshStudent(); api.analysis(me.student!.id).then(setAnalysis); api.studentAssessments(me.student!.id).then(setAttempts) }}
+        onError={(m) => toast.push(m, 'error')}
+        onSuccess={(m) => toast.push(m)}
+      />
+    )
+  }
+
   return (
     <div className="grid grid-2">
       <div className="card">
         <h3>Verify a skill</h3>
         <p className="card-sub">Take a proctored 10-question assessment to move a skill from self-reported to Verified.</p>
-        {viableSkills.length === 0 && !keepIds.size && (
-          <div className="empty">No skill gaps to assess. Select a target role first.</div>
+        {renderedGaps.length === 0 && !showBrowse && (
+          <div className="empty">No skill gaps to assess. Select a target role first to see tailored gaps.</div>
         )}
         <div className="stack">
-          {renderedGaps.map((g) => {
-            const last = attempts.filter((a) => a.skill_id === g.skill_id).sort((a, b) => b.id - a.id)[0]
-            return (
-              <AssessmentStarter
-                key={g.skill_id}
-                gap={g}
-                lastAttempt={last}
-                onActivate={() => keep(g.skill_id)}
-                onDeactivate={() => release(g.skill_id)}
-                onDone={() => { refreshStudent(); api.analysis(me.student!.id).then(setAnalysis); api.studentAssessments(me.student!.id).then(setAttempts) }}
-              />
-            )
-          })}
+          {renderedGaps.map(renderGap)}
+          {showBrowse && (
+            <>
+              <div className="info" style={{ whiteSpace: 'normal' }}>
+                <IconAssessment size={15} />
+                {analysis
+                  ? 'You have no open skill gaps right now. You can still verify any skill below to strengthen your profile.'
+                  : 'Set a target role to get tailored gap suggestions — or verify a skill directly below.'}
+              </div>
+              {browseSkills.map((s) => {
+                const last = attempts.filter((a) => a.skill_id === s.id).sort((a, b) => b.id - a.id)[0]
+                return (
+                  <AssessmentStarter
+                    key={s.id}
+                    gap={{ skill_id: s.id, skill_name: s.name, category: s.category, required_level: 'Intermediate', student_level: null, status: 'missing', verified: false }}
+                    lastAttempt={last}
+                    onActivate={() => {}}
+                    onDeactivate={() => {}}
+                    onDone={() => { refreshStudent(); api.studentAssessments(me.student!.id).then(setAttempts) }}
+                    onError={(m) => toast.push(m, 'error')}
+                    onSuccess={(m) => toast.push(m)}
+                  />
+                )
+              })}
+            </>
+          )}
         </div>
+        <ToastRegion toasts={toast.toasts} dismiss={toast.dismiss} />
       </div>
       <div className="card">
         <h3>Assessment history</h3>
@@ -84,7 +124,7 @@ export default function AssessmentsPage() {
 
 type Mode = 'idle' | 'quiz' | 'practice' | 'result'
 
-function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate }: { gap: any; lastAttempt?: AssessmentAttempt; onDone: () => void; onActivate: () => void; onDeactivate: () => void }) {
+function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate, onError, onSuccess }: { gap: any; lastAttempt?: AssessmentAttempt; onDone: () => void; onActivate: () => void; onDeactivate: () => void; onError?: (m: string) => void; onSuccess?: (m: string) => void }) {
   const { me } = useApp()
   const [mode, setMode] = useState<Mode>('idle')
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
@@ -126,7 +166,7 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
         setMode('quiz')
       }
     } catch (e: any) {
-      alert('Failed to generate quiz: ' + e.message)
+      onError?.('Failed to generate quiz: ' + e.message)
     } finally {
       setGenerating(false)
     }
@@ -183,8 +223,9 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate 
       setLocked(false)
       setMode('result')
       onDone()
+      onSuccess?.(res.passed ? `${gap.skill_name} verified — you passed!` : `Assessment complete for ${gap.skill_name}.`)
     } catch (e: any) {
-      alert('Submit failed: ' + e.message)
+      onError?.('Submit failed: ' + e.message)
     } finally {
       setBusy(false)
     }

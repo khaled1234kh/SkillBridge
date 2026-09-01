@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
-import type { Analysis, ActivitySummary, Student, RoleRecord, Candidate, RoleSkillCoverage } from '../lib/types'
+import type { Analysis, ActivitySummary, Student, RoleRecord, Candidate, RoleSkillCoverage, RecentJob } from '../lib/types'
 import { GapPill, SkillTag, LevelBadge } from '../components/widgets'
 import { IconArrowRight, IconCheck, IconVerified, IconFlame, IconBolt, IconLeaderboard, IconTrophy, IconExternal, IconShield } from '../components/Icons'
 
@@ -23,6 +23,74 @@ function copyText(text: string): Promise<void> {
   document.execCommand('copy')
   document.body.removeChild(ta)
   return Promise.resolve()
+}
+
+function JobsCard() {
+  const { me } = useApp()
+  const [data, setData] = useState<{ source: string; jobs: RecentJob[] } | null>(null)
+  const [tried, setTried] = useState(false)
+  useEffect(() => {
+    if (!me?.student?.id) return
+    setData(null)
+    setTried(false)
+    api.recentJobs()
+      .then((d) => { setData(d); setTried(true) })
+      .catch(() => { setData(null); setTried(true) })
+  }, [me?.student?.id])
+
+  return (
+    <div className="card mt" style={{ marginTop: 18 }}>
+      <div className="flex between" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <h3 style={{ margin: 0 }}>Recent roles for you</h3>
+        <span className="small muted">
+          {data?.source === 'live' ? 'Live feed' : data?.source === 'fallback' ? 'Curated (offline feed)' : '…'}
+        </span>
+      </div>
+      <p className="card-sub" style={{ marginTop: 4 }}>
+        Real, recent openings matched to your skills, ranked most fitting first. Senior roles are de-ranked for early-career profiles.
+      </p>
+      {!tried ? (
+        <div className="loading">Loading recent roles…</div>
+      ) : data && data.jobs.length > 0 ? (
+        <div className="stack">
+          {data.jobs.map((j, i) => {
+            const pct = j.match_pct ?? 0
+            const isSeniorFit = pct <= 15
+            return (
+              <a
+                className={`resource ${isSeniorFit ? 'job-senior' : ''}`}
+                key={`${j.title}-${i}`}
+                href={j.url}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <div className="job-match-badge" style={{ background: pct >= 40 ? 'var(--green)' : pct >= 20 ? 'var(--amber)' : 'var(--slate-300)' }}>
+                  {pct}
+                </div>
+                <div className="resource-main">
+                  <span className="resource-title">{j.title}</span>
+                  <span className="resource-meta">
+                    {j.company}
+                    {j.source ? ` · ${j.source}` : ''}
+                    {j.seniority ? ` · ${j.seniority}` : ''}
+                    {j.country ? ` · ${j.country}` : ''}
+                  </span>
+                  {j.match_reason && <span className="job-reason">{j.match_reason}</span>}
+                </div>
+                {j.tags && j.tags.length > 0 && (
+                  <div style={{ marginLeft: 'auto', display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                    {j.tags.slice(0, 3).map((t) => <span className="chip" key={t} style={{ background: 'var(--slate-100)', color: 'var(--slate-500)' }}>{t}</span>)}
+                  </div>
+                )}
+              </a>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="empty">No recent roles available right now.</div>
+      )}
+    </div>
+  )
 }
 
 export default function DashboardPage({ onNavigate }: { onNavigate?: (section: string) => void }) {
@@ -131,6 +199,7 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
             </div>
           </div>
         )}
+        <JobsCard />
       </div>
     )
   }
@@ -284,6 +353,8 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
           <IconLeaderboard size={13} /> {activity?.leaderboard?.message || 'Cohort leaderboard'}
         </div>
       </div>
+
+      <JobsCard />
     </div>
   )
 }
