@@ -188,8 +188,23 @@ def seed():
 
     # users (password hashed via the new create_user signature).
     # Seed/demo accounts are pre-verified so the app works on first launch.
+    # Every account carries a location so the live roles feed is demoable.
+    USER_META = {
+        "aisha@student.edu": ("United Kingdom", "Birmingham"),
+        "omar@student.edu": ("United Kingdom", "Birmingham"),
+        "leila@student.edu": ("United Kingdom", "Birmingham"),
+        "marcus@student.edu": ("United Kingdom", "Birmingham"),
+        "priya@student.edu": ("United Kingdom", "Birmingham"),
+        "sara@student.edu": ("United Kingdom", "Birmingham"),
+        "tomas@student.edu": ("United Kingdom", "Birmingham"),
+        "hr@northstar.com": ("United Kingdom", "Birmingham"),
+        "hr@signal.com": ("United Kingdom", "London"),
+        "admin@univ.edu": ("United Kingdom", "Birmingham"),
+    }
     for email, role, display, password in USERS:
-        models.create_user(email, role, display, password=password, verified=1)
+        country, location = USER_META.get(email, ("", ""))
+        models.create_user(email, role, display, password=password, verified=1,
+                           country=country, location=location)
 
     # reference country + university list (used by the cascading signup dropdown)
     with get_cursor() as c:
@@ -201,14 +216,14 @@ def seed():
     # companies
     company_ids = {}
     companies = [
-        ("hr@northstar.com", "Northstar Labs", "AI / Software"),
-        ("hr@signal.com", "Signal Works", "Data & Analytics"),
-        ("catalog@skillbridge.io", "SkillBridge Talent Catalog", "Reference"),
+        ("hr@northstar.com", "Northstar Labs", "AI / Software", "Birmingham"),
+        ("hr@signal.com", "Signal Works", "Data & Analytics", "London"),
+        ("catalog@skillbridge.io", "SkillBridge Talent Catalog", "Reference", ""),
     ]
-    for email, name, industry in companies:
+    for email, name, industry, location in companies:
         u = (models.get_user_by_email(email) if not email.startswith("catalog")
              else {"id": None})
-        comp = models.create_company(name, industry, user_id=u["id"])
+        comp = models.create_company(name, industry, user_id=u["id"], location=location)
         company_ids[email] = comp["id"]
 
     # internal roles

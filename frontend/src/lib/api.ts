@@ -42,8 +42,8 @@ export const api = {
     const p = req<Session & { entity_type: string }>('/api/auth/login', { method: 'POST', body: JSON.stringify({ email, password }) })
     return p.then((s) => { setToken(s.token); return s })
   },
-  signup: (email: string, password: string, display_name: string, role: string, university?: string, country?: string, industry?: string) => {
-    const p = req<any>('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, display_name, role, university, country, industry }) })
+  signup: (email: string, password: string, display_name: string, role: string, university?: string, country?: string, industry?: string, location?: string) => {
+    const p = req<any>('/api/auth/signup', { method: 'POST', body: JSON.stringify({ email, password, display_name, role, university, country, industry, location }) })
     return p.then((s) => { setToken(s.token); return s })
   },
   logout: () => {
@@ -54,8 +54,8 @@ export const api = {
   googleConfig: () => req<GoogleConfig>('/api/auth/google/config'),
   googleDemo: (email: string, display_name: string) =>
     req<any>('/api/auth/google/demo', { method: 'POST', body: JSON.stringify({ email, display_name }) }),
-  googleComplete: (google_sub: string, role: string, opts?: { university?: string; country?: string; industry?: string }) => {
-    const p = req<any>('/api/auth/google/complete', { method: 'POST', body: JSON.stringify({ google_sub, role, university: opts?.university, country: opts?.country, industry: opts?.industry }) })
+  googleComplete: (google_sub: string, role: string, opts?: { university?: string; country?: string; industry?: string; location?: string }) => {
+    const p = req<any>('/api/auth/google/complete', { method: 'POST', body: JSON.stringify({ google_sub, role, university: opts?.university, country: opts?.country, industry: opts?.industry, location: opts?.location }) })
     return p.then((s) => { setToken(s.token); return s })
   },
   resetRequest: (email: string) =>

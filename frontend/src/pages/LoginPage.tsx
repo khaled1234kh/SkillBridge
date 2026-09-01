@@ -51,6 +51,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
   const [country, setCountry] = useState('')
   const [customUniversity, setCustomUniversity] = useState('')
   const [industry, setIndustry] = useState('')
+  const [location, setLocation] = useState('')
   const [universities, setUniversities] = useState<UniversityOption[]>([])
   const [verifyNotice, setVerifyNotice] = useState('')
   const [pending, setPending] = useState<any>(null)
@@ -94,6 +95,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
     if (!/^\S+@\S+\.\S+$/.test(email.trim())) errs.email = 'Enter a valid email address.'
     if (password.length < 8) errs.password = 'Password must be at least 8 characters.'
     if (role === 'Company' && !industry.trim()) errs.industry = 'Please enter your industry.'
+    if (!location.trim()) errs.location = 'Please enter your city so we can show you roles near you.'
     setFieldErrs(errs)
     if (Object.keys(errs).length) return
     setBusy(true)
@@ -101,7 +103,8 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
       const uniChosen = role === 'Student' || role === 'University Admin'
       const uni = university === '__other__' ? customUniversity.trim() : university
       const res = await signup(email.trim(), password, displayName.trim(), role,
-        uniChosen ? uni : undefined, uniChosen ? country : undefined, role === 'Company' ? industry.trim() : undefined)
+        uniChosen ? uni : undefined, uniChosen ? country : undefined, role === 'Company' ? industry.trim() : undefined,
+        location.trim())
       toast.push('Account created successfully.', 'success')
       if (res.email_verified_delivery) {
         // SMTP is configured: the user must verify their email before using the account.
@@ -161,12 +164,13 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
     if ((role === 'Student' || role === 'University Admin') && !country) errs.country = 'Please choose a country.'
     if ((role === 'Student' || role === 'University Admin') && !university) errs.university = 'Please choose a university.'
     if (role === 'Company' && !industry.trim()) errs.industry = 'Please enter your industry.'
+    if (!location.trim()) errs.location = 'Please enter your city so we can show you roles near you.'
     setFieldErrs(errs)
     if (Object.keys(errs).length) return
     setBusy(true)
     try {
       const uni = university === '__other__' ? customUniversity.trim() : university
-      await api.googleComplete(pending.google_sub, role, { university: uni, country, industry: industry.trim() })
+      await api.googleComplete(pending.google_sub, role, { university: uni, country, industry: industry.trim(), location: location.trim() })
       window.location.reload()
     } catch (err: any) { setError(err.message) }
     finally { setBusy(false) }
@@ -228,6 +232,9 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
               <option value="University Admin">University administration</option>
             </select>
           </div>
+          <div className={`field ${fieldErrs.location ? 'invalid' : ''}`}><label>City (location) <span className="muted small">roles near you</span></label>
+            <input value={location} onChange={(e) => { setLocation(e.target.value); if (fieldErrs.location) setFieldErrs((f) => ({ ...f, location: '' })) }} autoComplete="address-level2" placeholder="e.g. Birmingham" />
+            {fieldErrs.location && <span className="field-err">{fieldErrs.location}</span>}</div>
           {(role === 'Student' || role === 'University Admin') && (
             <div className="university-picker">
               <div className="field">
@@ -316,6 +323,9 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
               <option value="University Admin">University administration</option>
             </select>
           </div>
+          <div className={`field ${fieldErrs.location ? 'invalid' : ''}`}><label>City (location) <span className="muted small">roles near you</span></label>
+            <input value={location} onChange={(e) => { setLocation(e.target.value); if (fieldErrs.location) setFieldErrs((f) => ({ ...f, location: '' })) }} autoComplete="address-level2" placeholder="e.g. Birmingham" />
+            {fieldErrs.location && <span className="field-err">{fieldErrs.location}</span>}</div>
           {(role === 'Student' || role === 'University Admin') && (
             <div className="university-picker">
               <div className={`field ${fieldErrs.country ? 'invalid' : ''}`}>

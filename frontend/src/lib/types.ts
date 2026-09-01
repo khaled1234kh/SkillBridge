@@ -11,6 +11,7 @@ export interface Session {
   verified?: boolean
   country?: string
   university?: string
+  location?: string
   student?: Student
   company?: Company
   roles?: RoleRecord[]
@@ -42,6 +43,7 @@ export interface RoleRecord {
   title: string
   description?: string
   company_name?: string
+  company_location?: string
   required_skills: RequiredSkill[]
   is_reference?: number
 }
@@ -51,6 +53,7 @@ export interface RolesResponse {
   catalog: RoleRecord[]
   is_company: boolean
   company_id: number | null
+  location?: string
 }
 
 export interface SelfReportedSkill {

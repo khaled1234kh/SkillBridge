@@ -186,6 +186,7 @@ def signup(body: dict, background_tasks: BackgroundTasks):
     role = body.get("role")
     country = (body.get("country") or "").strip()
     university = (body.get("university") or "").strip()
+    location = (body.get("location") or "").strip()
     if not email or not password or not display_name:
         raise HTTPException(status_code=400, detail="Email, password and display name are required")
     if len(password) < 8:
@@ -194,6 +195,8 @@ def signup(body: dict, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=400, detail="You can create a Student, Company or University Admin account here")
     if models.get_user_by_email(email):
         raise HTTPException(status_code=409, detail="An account with this email already exists")
+    if not location:
+        raise HTTPException(status_code=400, detail="Please tell us your location (city) so we can show you roles near you")
     if role == "University Admin" and not (country and university):
         raise HTTPException(status_code=400, detail="University Admins must choose a country and university")
 
@@ -202,11 +205,13 @@ def signup(body: dict, background_tasks: BackgroundTasks):
     # so the app stays demoable but the verification flow remains available.
     verify = mailer.email_configured()
     user = models.create_user(email, role, display_name, password=password,
-                              verified=0 if verify else 1, country=country, university=university)
+                              verified=0 if verify else 1, country=country,
+                              university=university, location=location)
     if role == "Student":
         models.create_student(display_name, email, university, user_id=user["id"])
     elif role == "Company":
-        models.create_company(display_name, (body.get("industry") or "").strip(), user_id=user["id"])
+        models.create_company(display_name, (body.get("industry") or "").strip(),
+                              user_id=user["id"], location=location)
     elif role == "University Admin":
         _upsert_university(country, university)
     if verify:
@@ -301,8 +306,11 @@ def google_complete(body: dict):
     country = (body.get("country") or "").strip()
     university = (body.get("university") or "").strip()
     industry = (body.get("industry") or "").strip()
+    location = (body.get("location") or "").strip()
     if not sub or role not in VALID_SIGNUP_ROLES:
         raise HTTPException(status_code=400, detail="google_sub and a valid role are required")
+    if not location:
+        raise HTTPException(status_code=400, detail="Please tell us your location (city) so we can show you roles near you")
     if role == "University Admin" and not (country and university):
         raise HTTPException(status_code=400, detail="University Admins must choose a country and university")
     reg = models.get_google_registration(sub)
@@ -310,11 +318,11 @@ def google_complete(body: dict):
         raise HTTPException(status_code=404, detail="No pending Google registration")
     user = models.create_user(reg["email"], role, reg["display_name"],
                               auth_provider="google", google_sub=sub, verified=1,
-                              country=country, university=university)
+                              country=country, university=university, location=location)
     if role == "Student":
         models.create_student(reg["display_name"], reg["email"], university, user_id=user["id"])
     elif role == "Company":
-        models.create_company(reg["display_name"], industry, user_id=user["id"])
+        models.create_company(reg["display_name"], industry, user_id=user["id"], location=location)
     if country and university:
         _upsert_university(country, university)
     models.delete_google_registration(sub)
@@ -418,11 +426,27 @@ def api_list_roles(request: Request):
     user = _current_user(request)
     roles = models.list_roles()
     catalog = models.list_catalog_roles()
+    user_location = (user.get("location") or "").strip()
+    user_country = (user.get("country") or "").strip()
     if user["role"] == "Company":
         company = models.get_company_by_user(user["id"])
         company_id = company["id"] if company else None
         roles = [r for r in roles if r.get("company_id") == company_id and not r.get("is_reference")]
+    else:
+        # Live roster first: roles posted by companies in the user's location/country,
+        # then remote (no location) openings, then the rest.
+        def loc_rank(r):
+            loc = (r.get("company_location") or "").strip()
+            if not loc:
+                return 1
+            if user_location and loc.lower() == user_location.lower():
+                return 0
+            if user_country and (user_country.lower() in loc.lower() or loc.lower() in user_country.lower()):
+                return 0
+            return 2
+        roles.sort(key=lambda r: (loc_rank(r), r["title"].lower()))
     return {"roles": roles, "catalog": catalog,
+            "location": user_location,
             "is_company": user["role"] == "Company",
             "company_id": (models.get_company_by_user(user["id"]) or {}).get("id") if user["role"] == "Company" else None}
 
@@ -593,15 +617,38 @@ def api_delete_student(student_id: int, request: Request):
 
 # ------------------------------------------------------------------ CV upload + extraction
 
+def _pdf_to_text(content_bytes):
+    """Best-effort text extraction from an uploaded PDF. Returns '' on any
+    failure so callers can fall back instead of crashing."""
+    try:
+        from pypdf import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(content_bytes))
+        parts = []
+        for page in reader.pages:
+            try:
+                text = page.extract_text() or ""
+            except Exception:
+                continue
+            parts.append(text)
+        return "\n".join(parts).strip()
+    except Exception:
+        return ""
+
+
 @app.post("/api/students/{student_id}/cv")
 def upload_cv(student_id: int, file: UploadFile = File(...), request: Request = None):
     user = _current_user(request)
     _own_student(user, student_id)
     content_bytes = file.file.read()
-    try:
-        cv_text = content_bytes.decode("utf-8", errors="replace")
-    except Exception:
-        cv_text = ""
+    cv_text = ""
+    if content_bytes.startswith(b"%PDF"):
+        cv_text = _pdf_to_text(content_bytes)
+    if not cv_text.strip():
+        try:
+            cv_text = content_bytes.decode("utf-8", errors="replace")
+        except Exception:
+            cv_text = ""
     if not cv_text.strip():
         cv_text = "(uploaded document with no readable text)"
     extracted = genai.extract_skills_from_cv(cv_text)
@@ -844,13 +891,15 @@ def api_list_assessments(student_id: int, request: Request):
 # ------------------------------------------------------------------ recent jobs
 
 @app.get("/api/jobs/recent")
-def api_recent_jobs(request: Request, limit: int = 10):
+def api_recent_jobs(request: Request, limit: int = 10, location: str = "", country: str = ""):
     """Real, recent job postings matched + ranked (most → least fitting) to the
     signed-in student's skills, target role, and country. Live multi-source feed
     with a short cache; curated offline fallback when feeds are unreachable."""
     user = _current_user(request)
+    loc = location or user.get("location") or ""
+    cty = country or user.get("country") or ""
     skills = []
-    context = {"country": user.get("country") or "", "role": ""}
+    context = {"country": cty, "role": ""}
     if user["role"] == "Student":
         student = models.get_student_by_user(user["id"])
         if student:

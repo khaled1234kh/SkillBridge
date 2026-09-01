@@ -7,7 +7,7 @@ interface AppContextType {
   me: Session | null
   loading: boolean
   login: (email: string, password: string) => Promise<Session>
-  signup: (email: string, password: string, display_name: string, role: string, university?: string, country?: string, industry?: string) => Promise<Session>
+  signup: (email: string, password: string, display_name: string, role: string, university?: string, country?: string, industry?: string, location?: string) => Promise<Session>
   logout: () => Promise<void>
   refreshMe: () => Promise<void>
   refreshStudent: () => void
@@ -43,8 +43,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return s
   }
 
-  const signup = async (email: string, password: string, display_name: string, role: string, university?: string, country?: string, industry?: string) => {
-    const s = await api.signup(email, password, display_name, role, university, country, industry)
+  const signup = async (email: string, password: string, display_name: string, role: string, university?: string, country?: string, industry?: string, location?: string) => {
+    const s = await api.signup(email, password, display_name, role, university, country, industry, location)
     const me = await api.me()
     setSession({ ...s, ...me })
     return { ...s, ...me }

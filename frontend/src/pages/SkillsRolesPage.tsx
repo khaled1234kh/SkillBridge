@@ -9,6 +9,12 @@ import { ConfirmModal, ToastRegion, useToast } from '../components/ui'
 
 const LEVELS = ['Beginner', 'Intermediate', 'Advanced']
 
+function mergeRoles(roles: RoleRecord[], catalog: RoleRecord[]): RoleRecord[] {
+  const byId = new Map<number, RoleRecord>()
+  for (const r of [...roles, ...catalog]) if (!byId.has(r.id)) byId.set(r.id, r)
+  return [...byId.values()]
+}
+
 export default function SkillsRolesPage() {
   const { me } = useApp()
   if (!me) return null
@@ -43,7 +49,7 @@ function RoleCard({ r, selected, onSelect, selectable, dest }: {
       <div className="rc-head">
         <div>
           <div className="rc-title">{r.title} {dest === 'catalog' && <span className="chip chip-catalog">Catalog</span>}</div>
-          <div className="rc-company">{r.company_name}</div>
+          <div className="rc-company">{r.company_name}{r.company_location ? ` · ${r.company_location}` : ''}</div>
         </div>
         {selectable && (
           <button className={`btn btn-sm ${selected ? '' : 'btn-primary'}`} onClick={onSelect} disabled={selected}>
@@ -73,7 +79,7 @@ function StudentBrowse({ student }: { student?: Student }) {
   const [suggestOnly, setSuggestOnly] = useState(false)
   const toast = useToast()
 
-  const all = [...roles, ...catalog]
+  const all = mergeRoles(roles, catalog)
   const cvSkillNames = (student?.self_reported_skills || [])
     .map((s) => s.name.toLowerCase().trim())
     .filter(Boolean)
@@ -343,7 +349,7 @@ function CompanyRoles({ company }: { company?: any }) {
 // ------------------------------------------------------------------ Read-only (university)
 function ReadOnlyBrowse() {
   const { roles, catalog } = useRoles()
-  const all = [...roles, ...catalog]
+  const all = mergeRoles(roles, catalog)
   return (
     <div className="card">
       <div className="flex between">

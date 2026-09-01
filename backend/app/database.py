@@ -63,7 +63,8 @@ CREATE TABLE IF NOT EXISTS users (
     google_sub TEXT,
     verified INTEGER NOT NULL DEFAULT 0,
     country TEXT,
-    university TEXT
+    university TEXT,
+    location TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sessions (
@@ -120,7 +121,8 @@ CREATE TABLE IF NOT EXISTS companies (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER UNIQUE REFERENCES users(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
-    industry TEXT NOT NULL
+    industry TEXT NOT NULL,
+    location TEXT
 );
 
 CREATE TABLE IF NOT EXISTS skills (
@@ -223,6 +225,8 @@ def _migrate():
         ("users", "verified", "INTEGER NOT NULL DEFAULT 0"),
         ("users", "country", "TEXT"),
         ("users", "university", "TEXT"),
+        ("users", "location", "TEXT"),
+        ("companies", "location", "TEXT"),
         ("students", "cohort_confirmed", "INTEGER NOT NULL DEFAULT 0"),
         ("students", "share_public", "INTEGER NOT NULL DEFAULT 0"),
         ("roles", "is_reference", "INTEGER NOT NULL DEFAULT 0"),

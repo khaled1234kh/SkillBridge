@@ -113,7 +113,8 @@ def test_user_login_roles(client):
 def test_signup_creates_entity_and_login_works(client):
     r = client.post("/api/auth/signup", json={
         "email": "new-stud@student.edu", "password": "supersecret1",
-        "display_name": "New Student", "role": "Student", "university": "Aston University"})
+        "display_name": "New Student", "role": "Student", "university": "Aston University",
+        "location": "Birmingham"})
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["role"] == "Student" and data["token"]
@@ -123,7 +124,7 @@ def test_signup_creates_entity_and_login_works(client):
     # duplicate signup is rejected
     r = client.post("/api/auth/signup", json={
         "email": "new-stud@student.edu", "password": "supersecret1",
-        "display_name": "New Student", "role": "Student"})
+        "display_name": "New Student", "role": "Student", "location": "Birmingham"})
     assert r.status_code == 409
 
 
@@ -133,7 +134,8 @@ def test_signup_university_admin(client):
     r = client.post("/api/auth/signup", json={
         "email": "new-admin@univ.edu", "password": "supersecret1",
         "display_name": "New Admin", "role": "University Admin",
-        "country": "United Arab Emirates", "university": "Khalifa University"})
+        "country": "United Arab Emirates", "university": "Khalifa University",
+        "location": "Abu Dhabi"})
     assert r.status_code == 200, r.text
     data = r.json()
     assert data["role"] == "University Admin"
@@ -227,6 +229,7 @@ def test_signup_not_blocked_by_slow_email(client, monkeypatch):
     r = client.post("/api/auth/signup", json={
         "email": "neverfreeze@test.edu", "password": "supersecret1",
         "display_name": "Never Freeze", "role": "Student",
+        "location": "Birmingham",
     })
     elapsed = time.time() - start
     assert r.status_code == 200

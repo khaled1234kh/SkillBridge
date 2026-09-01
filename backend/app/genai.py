@@ -166,7 +166,11 @@ _SYNONYMS = {
     "rest api": "REST APIs", "restful": "REST APIs", "fast api": "FastAPI",
     "spark": "Spark", "kafka": "Data Engineering",
     "powerbi": "Power BI", "power bi": "Power BI", "tableau": "Tableau",
-    "cyber security": "Cybersecurity", "infosec": "Cybersecurity",
+    "cyber security": "Cybersecurity", "cybersecurity": "Cybersecurity",
+    "infosec": "Cybersecurity", "network security": "Network Security",
+    "networking": "Network Security", "networking basics": "Network Security",
+    "penetration testing": "Penetration Testing", "pen testing": "Penetration Testing",
+    "pentesting": "Penetration Testing",
     "docker": "Docker", "kubernetes": "Kubernetes", "k8s": "Kubernetes",
     "git": "Git", "github": "Git", "linux": "Linux", "aws": "AWS",
     "azure": "Azure", "gcp": "GCP", "google cloud": "GCP",
@@ -230,15 +234,77 @@ def _infer_level(text, name):
     return "Intermediate"
 
 
+def _skill_aliases():
+    """Reverse alias map: canonical skill name -> every accepted way it may
+    appear. Used for code-level evidence checking so a skill is only kept when
+    it (or one of its accepted aliases) is genuinely present in the CV text —
+    never inferred."""
+    aliases = {}
+    for syn, canon in _SYNONYMS.items():
+        key = canon.lower()
+        aliases.setdefault(key, set()).add(syn)
+    for canon in FALLBACK_SKILL_CATEGORIES:
+        aliases.setdefault(canon.lower(), set()).add(canon.lower())
+    return aliases
+
+
+_SKILL_ALIASES = _skill_aliases()
+
+
+def _cv_has_skill(cv_lower, name):
+    """True if the skill (or one of its aliases) appears as a whole phrase in
+    the CV text."""
+    for alias in _SKILL_ALIASES.get(name.lower(), {name.lower()}):
+        tokens = re.findall(r"[a-z0-9#+.\-]+", alias)
+        if not tokens:
+            continue
+        # A single stray character (e.g. the "c" alias for C++) is not credible
+        # evidence — require at least two characters of signal.
+        if len(tokens) == 1 and len(tokens[0]) < 2:
+            continue
+        if len(tokens) == 1:
+            if re.search(r"(?<![a-z0-9])" + re.escape(tokens[0]) + r"(?![a-z0-9])", cv_lower):
+                return True
+        else:
+            if re.search(r"\s*".join(re.escape(t) for t in tokens), cv_lower):
+                return True
+    return False
+
+
+def _evidence_validated(items, cv_text):
+    """Drop any extracted skill that has no textual support in the CV. This is
+    the code-level guard against GenAI hallucination: every surviving skill must
+    have grounding in the actual CV text."""
+    cv_lower = (cv_text or "").lower()
+    out = []
+    for item in items:
+        name = (item.get("name") or "").strip()
+        if not name:
+            continue
+        if _cv_has_skill(cv_lower, name):
+            out.append(item)
+    return out
+
+
 def extract_skills_from_cv(cv_text):
     system = (
-        "You are a skill-extraction engine. Given a candidate's CV or transcript text, "
-        "extract the technical and professional skills they claim, and return STRICT JSON: "
-        'an array of objects, each {"name": string, "level": "Beginner"|"Intermediate"|"Advanced", '
-        '"category": string}. Include only skills actually present or implied in the text. '
-        "Infer level from how the person describes experience. Use the supplied list of "
-        "canonical skill names when the text clearly refers to one of them. "
-        "Return ONLY the JSON array, no prose."
+        "You are a strict skill-extraction engine. Given a candidate's CV or transcript text, "
+        "extract the technical and professional skills the candidate ACTUALLY claims, and "
+        "return STRICT JSON: an array of objects, each {\"name\": string, "
+        "\"level\": \"Beginner\"|\"Intermediate\"|\"Advanced\", \"category\": string, "
+        "\"evidence\": string}. "
+        "CRITICAL RULES - violations are hallucinations:\n"
+        "1. EVERY skill must be explicitly named or described in the supplied text. "
+        "You must NEVER invent, guess, or infer a skill that is not written in the CV.\n"
+        "2. If a skill is not mentioned in the CV, DO NOT include it, no matter how "
+        "common or related it seems.\n"
+        "3. Set \"evidence\" to the exact short phrase from the CV that supports that "
+        "skill (the sentence/line that mentions it). If you cannot point to evidence, "
+        "you must NOT include the skill.\n"
+        "4. Prefer the supplied canonical skill names when the text clearly refers to "
+        "one of them, but only if that skill is actually in the text.\n"
+        "5. Include ALL skills that are clearly present in the text - do not skip any.\n"
+        "Infer level from how the person describes experience. Return ONLY the JSON array, no prose."
     )
 
     def fallback():
@@ -255,13 +321,15 @@ def extract_skills_from_cv(cv_text):
                         "name": canon, "level": _infer_level(cv_text, canon),
                         "category": cat or "General",
                     }
-        # 2) Canonical-name scan always runs too (not only when empty) so
-        #    multi-word skills embedded mid-sentence are never missed.
+        # 2) Alias/synonym scan always runs too (not only when empty) so
+        #    multi-word skills embedded mid-sentence — or phrased as a known
+        #    alias ("Networking Basics" for "Network Security", "ML" for
+        #    "Machine Learning") — are never missed.
         lowered = cv_text.lower()
         for canon in sorted(FALLBACK_SKILL_CATEGORIES, key=len, reverse=True):
             if canon.lower() in found:
                 continue
-            if re.search(rf"\b{re.escape(canon.lower())}\b", lowered):
+            if _cv_has_skill(lowered, canon):
                 found[canon] = {
                     "name": canon, "level": _infer_level(cv_text, canon),
                     "category": FALLBACK_SKILL_CATEGORIES[canon],
@@ -294,6 +362,25 @@ def extract_skills_from_cv(cv_text):
             level = _infer_level(cv_text, name)
         cat = cat or str(item.get("category") or "")[:40] or "General"
         cleaned.append({"name": name, "level": level, "category": cat})
+
+    # Code-level hallucination guard: every skill the model returned must be
+    # supported by an exact mention (or an accepted alias) in the CV text.
+    # Anything without evidence is rejected outright, regardless of the prompt.
+    if re.search(r"[A-Za-z]{2,}", cv_text):
+        cleaned = _evidence_validated(cleaned, cv_text)
+
+    # Union with the deterministic extractor. It only ever emits skills found
+    # literally in the text (canonical + synonym scan), so it guarantees skills
+    # the model missed (e.g. Python, Java, Penetration Testing) are never lost,
+    # while the evidence gate above guarantees the model's inventions are never
+    # kept. Model level/category wins for skills found by both.
+    grounded = fallback()
+    by_name = {r["name"].lower(): r for r in cleaned}
+    for r in grounded:
+        key = r["name"].lower()
+        if key not in by_name:
+            by_name[key] = r
+            cleaned.append(r)
     return cleaned or fallback_val
 
 

@@ -91,17 +91,17 @@ def get_company_by_user(user_id):
         return _row(c.execute("SELECT * FROM companies WHERE user_id=?", (user_id,)).fetchone())
 
 
-def create_company(name, industry, user_id=None):
+def create_company(name, industry, user_id=None, location=None):
     with get_cursor() as c:
-        cur = c.execute("INSERT INTO companies (name, industry, user_id) VALUES (?,?,?)",
-                        (name, industry, user_id))
+        cur = c.execute("INSERT INTO companies (name, industry, location, user_id) VALUES (?,?,?,?)",
+                        (name, industry, location, user_id))
         return get_company(cur.lastrowid)
 
 
-def update_company(company_id, name=None, industry=None):
+def update_company(company_id, name=None, industry=None, location=None):
     with get_cursor() as c:
-        cur = c.execute("UPDATE companies SET name=COALESCE(?,name), industry=COALESCE(?,industry) WHERE id=?",
-                        (name, industry, company_id))
+        cur = c.execute("UPDATE companies SET name=COALESCE(?,name), industry=COALESCE(?,industry), location=COALESCE(?,location) WHERE id=?",
+                        (name, industry, location, company_id))
         return cur.rowcount
 
 
@@ -115,10 +115,12 @@ def delete_company(company_id):
 
 def list_roles(company_id=None):
     with get_cursor() as c:
-        q = """SELECT r.*, c.name AS company_name
+        q = """SELECT r.*, c.name AS company_name, c.location AS company_location
                FROM roles r JOIN companies c ON c.id=r.company_id"""
         if company_id is not None:
             q += " WHERE r.company_id=?"
+        if company_id is None:
+            q += " WHERE r.is_reference=0"
         q += " ORDER BY r.title"
         rows = c.execute(q, (company_id,) if company_id is not None else ()).fetchall()
         out = []
@@ -140,6 +142,37 @@ def list_catalog_roles():
             rd["required_skills"] = role_skills(c, r["id"])
             out.append(rd)
         return out
+
+
+def list_feed_roles(location=None, country=None, limit=8):
+    """Live openings (company-posted, non-reference roles) ranked by how close
+    they are to the requesting user's location: same location first, roles with
+    no location (remote/global) next, the rest after. Supplies the 'available
+    roles' live feed on the student dashboard."""
+    location = (location or "").strip()
+    country = (country or "").strip()
+    with get_cursor() as c:
+        rows = c.execute("""SELECT r.id, r.title, r.description, r.is_reference,
+                                   c.name AS company_name, c.location AS company_location
+                            FROM roles r JOIN companies c ON c.id=r.company_id
+                            WHERE r.is_reference=0
+                            ORDER BY r.title""").fetchall()
+        out = []
+        for r in rows:
+            rd = _row(r)
+            rd["required_skills"] = role_skills(c, r["id"])
+            out.append(rd)
+        def rank(r):
+            loc = (r.get("company_location") or "").strip()
+            if not loc:
+                return 1
+            if loc.lower() == location.lower():
+                return 0
+            if country and (country.lower() in loc.lower() or loc.lower() in country.lower()):
+                return 0
+            return 2
+        out.sort(key=lambda r: (rank(r), 0 if not (r.get("company_location") or "").strip() else 1, r["title"].lower()))
+        return out[:limit]
 
 
 def role_skills(cur, role_id):
@@ -450,7 +483,7 @@ def delete_assessment_attempt(attempt_id):
 
 # ---------------------------------------------------------------- users / auth
 
-def create_user(email, role, display_name, password=None, auth_provider="local", google_sub=None, verified=0, country=None, university=None):
+def create_user(email, role, display_name, password=None, auth_provider="local", google_sub=None, verified=0, country=None, university=None, location=None):
     """Create a user. Local accounts hash their password; Google accounts store none."""
     pw_col = password or ""  # legacy NOT NULL constraint; auth always uses password_hash
     hash_b64 = salt_b64 = None
@@ -459,9 +492,9 @@ def create_user(email, role, display_name, password=None, auth_provider="local",
         hash_b64, salt_b64 = hash_password(password)
     with get_cursor() as c:
         cur = c.execute(
-            """INSERT INTO users (email, password, role, display_name, password_hash, password_salt, auth_provider, google_sub, verified, country, university)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
-            (email, pw_col, role, display_name, hash_b64, salt_b64, auth_provider, google_sub, int(verified), country, university))
+            """INSERT INTO users (email, password, role, display_name, password_hash, password_salt, auth_provider, google_sub, verified, country, university, location)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+            (email, pw_col, role, display_name, hash_b64, salt_b64, auth_provider, google_sub, int(verified), country, university, location))
         return get_user(cur.lastrowid)
 
 
@@ -494,7 +527,7 @@ def public_user(user):
     return {"id": user["id"], "email": user["email"], "role": user["role"],
             "display_name": user["display_name"], "auth_provider": user.get("auth_provider", "local"),
             "verified": bool(user.get("verified")), "country": user.get("country") or "",
-            "university": user.get("university") or ""}
+            "university": user.get("university") or "", "location": user.get("location") or ""}
 
 
 def set_user_password(user_id, password):
