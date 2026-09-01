@@ -47,9 +47,23 @@ export function venvPython(venvDir) {
   return null
 }
 
+// Return true if the venv's python can actually import pip (i.e. is usable).
+function venvHasPip(venvPy) {
+  if (!venvPy) return false
+  const r = spawnSync(venvPy, ['-m', 'pip', '--version'], { stdio: 'ignore' })
+  return !r.error && r.status === 0
+}
+
 export function ensureVenv() {
   const venvDir = path.join(ROOT, process.env.VENV_DIR || '.venv')
   let venvPy = process.env.VENV_PY || venvPython(venvDir)
+  // A .venv folder that exists but can't run pip (e.g. interrupted creation,
+  // missing ensurepip) is broken and must be recreated before use.
+  if (venvPy && !venvHasPip(venvPy)) {
+    log('Recreating broken virtual environment (missing pip)')
+    rmSync(venvDir, { recursive: true, force: true })
+    venvPy = null
+  }
   if (!venvPy) {
     if (existsSync(venvDir)) {
       log('Recreating incomplete virtual environment')
@@ -63,9 +77,13 @@ export function ensureVenv() {
     }
     run(py, ['-m', 'venv', venvDir])
     venvPy = venvPython(venvDir)
-  }
-  if (!venvPy) {
-    throw new Error('Virtual environment was created but no Python was found under .venv/')
+    if (!venvHasPip(venvPy)) {
+      // Some minimal Python installs disable ensurepip; try to bootstrap it.
+      run(py, ['-m', 'ensurepip', '--upgrade', '--default-pip'], { allowFail: true })
+      if (!venvHasPip(venvPy)) {
+        throw new Error('Virtual environment was created but pip is unavailable. Install a full Python 3.10+ and try again.')
+      }
+    }
   }
   return venvPy
 }
@@ -78,7 +96,7 @@ export function run(cmd, argList, opts = {}) {
   const r = spawnSync(cmd, argList, {
     cwd: opts.cwd || ROOT,
     stdio: opts.stdio === undefined ? 'inherit' : opts.stdio,
-    shell: false,
+    shell: process.platform === 'win32' && !opts.noShell,
     env: { ...process.env, ...(opts.env || {}) },
   })
   if (r.status !== 0) {

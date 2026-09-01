@@ -63,85 +63,45 @@ scripts/
   start.sh          single-command startup
 ```
 
-## Run (simplest — works anywhere, no Docker)
+## Run (simplest — one command, works everywhere)
 
-One command starts the whole app from VS Code, PowerShell, cmd, Git Bash, or a
-Mac/Linux terminal. It runs the frontend build then starts the backend, which
-serves the app at <http://localhost:8000>. It runs in the foreground, so logs
-stream live and **Ctrl+C stops it** — you keep full control.
+**One command** starts the whole app (frontend + backend + seeded database) and opens it in
+your browser. It works the same in **VS Code PowerShell, cmd, Git Bash, WSL, macOS, and Linux**
+— no long setup, no separate steps.
 
 ```bash
-# Clone (first time) then run
 git clone https://github.com/khaled1234kh/SkillBridge.git
 cd SkillBridge
 npm start
 ```
 
-On Windows in PowerShell you can also run `.\start.ps1`.
+Then open **<http://localhost:8000>** (it automatically picks another port like 8001 if 8000
+is already in use).
 
-Prerequisites: **Node.js 18+** (required) and **Python 3.10+** (must be on your PATH).
+> Prerequisites: **Node.js 18+** and **Python 3.10+** (both on your PATH). That's it —
+> everything else (the Python virtual environment, frontend dependencies, and sample database)
+> is installed automatically on the first run.
 
-What `npm start` does automatically (only on first run, then it's fast):
-1. Creates a Python virtual environment (`.venv`) and installs backend deps.
-2. Installs frontend deps and builds the frontend.
+What `npm start` does automatically (only the first time — after that it's fast):
+
+1. Creates a Python virtual environment (`.venv`) with all backend dependencies.
+2. Installs frontend dependencies and builds the frontend.
 3. Seeds the SQLite database with realistic sample data.
 4. Starts the server and prints the URL to open.
 
 > Everything runs locally with just SQLite — no cloud dependency, no account needed.
 
-Options:
+Useful options:
 
 ```bash
-npm start -- --reset        # delete the DB so it re-seeds
-npm start -- --dev          # run the Vite dev server (live frontend reload)
-npm run start:dev           # same as above
-npm run setup               # install dependencies only, then exit
-npm start -- --port 9000    # run on a specific port
-ANTHROPIC_API_KEY=sk-... npm start   # enable live GenAI calls (or OPENAI_API_KEY)
+npm start -- --reset      # wipe the database and re-seed fresh sample data
+npm start -- --dev        # run the Vite dev server (live frontend reload)
+npm run setup             # install dependencies only, then exit
+npm start -- --port 9000  # run on a specific port
 ```
 
-Without a GenAI API key the four generation touchpoints (CV extraction, learning
-paths, AI Tutor, quiz grading) use a clear deterministic fallback so the demo still
-works end to end.
-
-## Run with Docker (single command)
-
-**Prerequisite:** Docker Desktop (Windows/macOS) or Docker Engine + Compose (Linux).
-
-```bash
-git clone https://github.com/khaled1234kh/SkillBridge.git
-cd SkillBridge
-./start.sh
-```
-
-On Windows, you can also double-click `start.bat`. Then open <http://localhost:3000>.
-
-`./start.sh` builds and starts all containers automatically:
-
-1. Builds the backend and frontend images.
-2. Starts the backend, frontend, and database containers with health checks.
-3. Creates and seeds the SQLite database in a persistent Docker volume with realistic
-   sample data — students, companies, roles, skills, and completed assessments — so
-   every screen is alive on first launch.
-4. Connects the frontend container to the backend container on the Compose network.
-
-> **No cloud dependency** — the whole app runs locally with just SQLite. No account
-> signup or external setup is required to try it.
-
-To run directly on the host without Docker, use `./start.sh --local` (Python 3.10+
-and Node.js 18+ / npm required). Stop the Docker stack with `docker compose down`.
-
-Useful extras:
-
-```bash
-./start.sh --reset                  # rebuild the stack and wipe Docker data volumes
-BACKEND_PORT=9000 ./start.sh        # expose the backend on a different port
-ANTHROPIC_API_KEY=sk-... ./start.sh # enable live GenAI calls (or OPENAI_API_KEY)
-```
-
-Without a GenAI API key the four generation touchpoints (CV extraction, learning
-paths, AI Tutor, quiz grading) use a clear deterministic fallback so the demo still
-works end to end. With a key set, the same flows make live API calls.
+The other entry points (`start.sh`, `start.ps1`, `start.bat`) are just thin wrappers that call
+the same `npm start` — you never need them.
 
 ### Demo accounts (password for all: `demo1234`)
 

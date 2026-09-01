@@ -15,9 +15,10 @@
 //   --no-build     skip the frontend install + build (if already built)
 //   --dev          run the Vite dev server instead of the built frontend
 //   --setup-only   install dependencies then exit (skips starting the server)
-import { spawn } from 'node:child_process'
-import { existsSync, rmSync } from 'node:fs'
+import { spawn, spawnSync } from 'node:child_process'
+import { existsSync, readFileSync, rmSync } from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { ROOT, log, ensureVenv, npmCmd, run } from './lib.mjs'
 
 const args = new Set(process.argv.slice(2))
@@ -44,7 +45,30 @@ async function portInUse(port) {
   })
 }
 
+function isWsl() {
+  if (os.platform() !== 'linux') return false
+  if (/\bmicrosoft\b/i.test(os.release())) return true
+  try {
+    return /microsoft/i.test(readFileSync('/proc/version', 'utf8'))
+  } catch {
+    return false
+  }
+}
+
+// On WSL, files under a Windows mount (/mnt/c) often lose their executable bit,
+// which breaks `tsc` (and other .bin shims) during the frontend build with
+// "Permission denied". Restore the executable bit on every CLI shim inside
+// node_modules so the build works seamlessly regardless of where the repo lives.
+function fixWslExecPermissions() {
+  if (!isWsl()) return
+  const binDir = path.join(ROOT, 'frontend', 'node_modules', '.bin')
+  if (!existsSync(binDir)) return
+  log('WSL detected: restoring executable permissions on frontend/node_modules/.bin')
+  spawnSync('chmod', ['-R', '+x', binDir], { stdio: 'ignore' })
+}
+
 async function main() {
+  fixWslExecPermissions()
   if (RESET) {
     const db = path.join(ROOT, 'backend', 'skillbridge.db')
     if (existsSync(db)) {

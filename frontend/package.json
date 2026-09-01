@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
+    "fix-bin": "node -e \"const{spawnSync}=require('child_process');if(process.platform==='linux'&&/microsoft/i.test(require('fs').readFileSync('/proc/version','utf8'))){spawnSync('chmod',['+x',require('fs').readdirSync('node_modules/.bin').map(f=>'node_modules/.bin/'+f)],{stdio:'inherit'});}\"",
+    "prebuild": "npm run fix-bin",
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit"
