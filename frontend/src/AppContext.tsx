@@ -11,6 +11,8 @@ interface AppContextType {
   logout: () => Promise<void>
   refreshMe: () => Promise<void>
   refreshStudent: () => void
+  authBanner: boolean
+  clearAuthBanner: () => void
 }
 
 const AppContext = createContext<AppContextType>(null as any)
@@ -18,6 +20,9 @@ const AppContext = createContext<AppContextType>(null as any)
 export function AppProvider({ children }: { children: React.ReactNode }) {
   const [session, setSession] = useState<Session | null>(null)
   const [loading, setLoading] = useState(true)
+  const [authBanner, setAuthBanner] = useState(false)
+
+  const clearAuthBanner = () => setAuthBanner(false)
 
   const refreshMe = async () => {
     if (getToken()) {
@@ -30,7 +35,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (getToken()) {
       api.me()
         .then((data) => setSession((prev) => ({ ...(prev || {}), ...data })))
-        .catch(() => setToken(null))
+        .catch((e) => { console.error('[app] session fetch failed:', e); setToken(null) })
         .finally(() => setLoading(false))
     } else {
       setLoading(false)
@@ -40,6 +45,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const login = async (email: string, password: string) => {
     const s = await api.login(email, password)
     setSession(s)
+    setAuthBanner(true)
     return s
   }
 
@@ -47,6 +53,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const s = await api.signup(email, password, display_name, role, university, country, industry, location)
     const me = await api.me()
     setSession({ ...s, ...me })
+    setAuthBanner(true)
     return { ...s, ...me }
   }
 
@@ -59,7 +66,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const refreshStudent = () => refreshMe()
 
   return (
-    <AppContext.Provider value={{ session, me: session, loading, login, signup, logout, refreshMe, refreshStudent }}>
+    <AppContext.Provider value={{ session, me: session, loading, login, signup, logout, refreshMe, refreshStudent, authBanner, clearAuthBanner }}>
       {children}
     </AppContext.Provider>
   )

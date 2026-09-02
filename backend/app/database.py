@@ -6,6 +6,7 @@ in-memory databases for unit tests.
 """
 import os
 import sqlite3
+import threading
 from contextlib import contextmanager
 
 DB_PATH = os.environ.get("SKILLBRIDGE_DB", os.path.join(
@@ -13,7 +14,7 @@ DB_PATH = os.environ.get("SKILLBRIDGE_DB", os.path.join(
 ))
 
 _override_conn = None
-_file_conn = None
+_local = threading.local()
 
 
 def set_db_for_test(conn=None):
@@ -23,14 +24,24 @@ def set_db_for_test(conn=None):
 
 
 def _connect():
-    global _file_conn
+    """Return a SQLite connection.
+
+    FastAPI runs requests on a threadpool, so concurrent requests execute on different
+    threads. sqlite3 connections are not safe to share across threads (doing so causes
+    `sqlite3.InterfaceError: bad parameter or other API misuse`). We therefore keep one
+    open connection per thread: each thread gets its own connection, and nested
+    get_cursor() blocks on the same thread reuse it (so uncommitted writes remain
+    visible to reads within that request).
+    """
     if _override_conn is not None:
         return _override_conn
-    if _file_conn is None:
-        _file_conn = sqlite3.connect(DB_PATH, check_same_thread=False)
-        _file_conn.row_factory = sqlite3.Row
-        _file_conn.execute("PRAGMA foreign_keys = ON")
-    return _file_conn
+    conn = getattr(_local, "conn", None)
+    if conn is None:
+        conn = sqlite3.connect(DB_PATH, check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        _local.conn = conn
+    return conn
 
 
 def get_connection():
@@ -46,8 +57,7 @@ def get_cursor():
     except Exception:
         conn.rollback()
         raise
-    # The connection is module-scoped (shared across the app or a test override),
-    # so it is never closed here.
+    # The connection is per-thread (or the test override), so it is never closed here.
 
 
 SCHEMA = """
@@ -90,6 +100,13 @@ CREATE TABLE IF NOT EXISTS google_registrations (
 );
 
 CREATE TABLE IF NOT EXISTS universities (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    country TEXT NOT NULL,
+    name TEXT NOT NULL,
+    UNIQUE(country, name)
+);
+
+CREATE TABLE IF NOT EXISTS cities (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     country TEXT NOT NULL,
     name TEXT NOT NULL,

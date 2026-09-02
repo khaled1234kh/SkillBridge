@@ -13,6 +13,14 @@ def _row(r):
     return dict(r) if r is not None else None
 
 
+def _safe_user(r):
+    """Strip plaintext password column from a user row before it leaks to any caller."""
+    d = dict(r) if r is not None else None
+    if d and "password" in d:
+        del d["password"]
+    return d
+
+
 # ---------------------------------------------------------------- skills
 
 def list_skills():
@@ -500,17 +508,17 @@ def create_user(email, role, display_name, password=None, auth_provider="local",
 
 def get_user_by_email(email):
     with get_cursor() as c:
-        return _row(c.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone())
+        return _safe_user(c.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone())
 
 
 def get_user(user_id):
     with get_cursor() as c:
-        return _row(c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone())
+        return _safe_user(c.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone())
 
 
 def get_user_by_google_sub(google_sub):
     with get_cursor() as c:
-        return _row(c.execute("SELECT * FROM users WHERE google_sub=?", (google_sub,)).fetchone())
+        return _safe_user(c.execute("SELECT * FROM users WHERE google_sub=?", (google_sub,)).fetchone())
 
 
 def get_user_by_email_or_google_sub(email, google_sub=None):
@@ -540,10 +548,17 @@ def set_user_password(user_id, password):
 
 def check_credentials(email, password):
     """Verify email/password. Returns the user row or None. Supports legacy
-    plaintext rows so pre-upgrade seed accounts keep signing in."""
-    user = get_user_by_email(email)
-    if not user:
+    plaintext rows so pre-upgrade seed accounts keep signing in.
+
+    Reads the raw row (including the legacy 'password' column) for the
+    comparison, but only ever returns a sanitized copy without it.
+    """
+    with get_cursor() as c:
+        raw = c.execute("SELECT * FROM users WHERE email=?", (email,)).fetchone()
+    if not raw:
         return None
+    full = dict(raw)
+    user = _safe_user(full)
     if user.get("auth_provider") == "google" or (user.get("password_hash") is None and user.get("auth_provider") == "google"):
         return None
     if user.get("password_hash"):
@@ -552,7 +567,7 @@ def check_credentials(email, password):
             return user
         return None
     # legacy plaintext
-    if user.get("password") and hmac_compat(password, user["password"]):
+    if full.get("password") and hmac_compat(password, full["password"]):
         return user
     return None
 
@@ -579,7 +594,7 @@ def get_session_user(token):
     with get_cursor() as c:
         r = c.execute("""SELECT u.* FROM sessions s JOIN users u ON u.id=s.user_id
                          WHERE s.token=?""", (token,)).fetchone()
-        return _row(r) if r else None
+        return _safe_user(r) if r else None
 
 
 def delete_session(token):
@@ -653,6 +668,21 @@ def list_universities():
 def add_university(country, name):
     with get_cursor() as c:
         c.execute("INSERT OR IGNORE INTO universities (country, name) VALUES (?,?)", (country, name))
+
+
+def list_locations():
+    """Countries with their cities, grouped and ordered (cascading dropdown)."""
+    groups = {}
+    with get_cursor() as c:
+        rows = c.execute("SELECT country, name FROM cities ORDER BY country, name").fetchall()
+    for r in rows:
+        groups.setdefault(r["country"], []).append(r["name"])
+    return [{"country": ctry, "cities": names} for ctry, names in groups.items()]
+
+
+def add_city(country, name):
+    with get_cursor() as c:
+        c.execute("INSERT OR IGNORE INTO cities (country, name) VALUES (?,?)", (country, name))
 
 
 # ------------------------------------------------------------------ email verification

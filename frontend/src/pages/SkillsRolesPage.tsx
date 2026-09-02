@@ -28,6 +28,7 @@ function useRoles() {
   const [catalog, setCatalog] = useState<RoleRecord[]>([])
   const [skills, setSkills] = useState<Skill[]>([])
   const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState('')
   useEffect(() => {
     Promise.all([api.roles(), api.skills()])
       .then(([res, skillsRes]: [RolesResponse, Skill[]]) => {
@@ -36,9 +37,9 @@ function useRoles() {
         setSkills(skillsRes || [])
         setLoaded(true)
       })
-      .catch(() => {})
+      .catch((e) => { console.error('[roles] load failed:', e); setLoadError(e.message || String(e)) })
   }, [])
-  return { roles, setRoles, catalog, skills, loaded }
+  return { roles, setRoles, catalog, skills, loaded, loadError }
 }
 
 function RoleCard({ r, selected, onSelect, selectable, dest }: {
@@ -70,13 +71,13 @@ function RoleCard({ r, selected, onSelect, selectable, dest }: {
 // ------------------------------------------------------------------ Student browse
 function StudentBrowse({ student }: { student?: Student }) {
   const { refreshStudent } = useApp()
-  const { roles, catalog, skills } = useRoles()
+  const { roles, catalog, skills, loadError } = useRoles()
   const [q, setQ] = useState('')
   const [selectedRole, setSelectedRole] = useState<number | null>(student?.target_role_id ?? null)
   const [uploading, setUploading] = useState(false)
   const [cvMsg, setCvMsg] = useState('')
   const [cvErr, setCvErr] = useState('')
-  const [suggestOnly, setSuggestOnly] = useState(false)
+  const [showAll, setShowAll] = useState(false)
   const toast = useToast()
 
   const all = mergeRoles(roles, catalog)
@@ -90,16 +91,18 @@ function StudentBrowse({ student }: { student?: Student }) {
     return { r, score }
   }).sort((a, b) => (b.score - a.score) || (a.r.title.localeCompare(b.r.title)))
 
+  const noCvSkills = cvSkillNames.length === 0
+
   const filtered = ranked.filter(({ r, score }) => {
     const matchSearch =
       r.title.toLowerCase().includes(q.toLowerCase()) ||
       (r.company_name || '').toLowerCase().includes(q.toLowerCase())
     if (!matchSearch) return false
-    if (suggestOnly) return score > 0
-    return true
+    // Without a CV we have nothing to match against, so show everything.
+    if (noCvSkills) return true
+    // With a CV, surface the best-fitting roles first, but let the user see all.
+    return showAll || score > 0
   })
-
-  const noCvSkills = cvSkillNames.length === 0
 
   const chooseTarget = async (roleId: number) => {
     if (!student) return
@@ -160,15 +163,16 @@ function StudentBrowse({ student }: { student?: Student }) {
       </div>
 
       <div className="card">
+        {loadError && <div className="error" style={{ marginBottom: 12 }}>{loadError}</div>}
         <div className="flex between" style={{ flexWrap: 'wrap', gap: 10 }}>
           <h3>Available roles</h3>
           <button
             className="chip-btn"
-            onClick={() => setSuggestOnly((s) => !s)}
+            onClick={() => setShowAll((s) => !s)}
             disabled={noCvSkills}
-            title={noCvSkills ? 'Upload a CV first to get recommendations' : 'Show only roles matching your CV skills'}
+            title={noCvSkills ? 'Upload a CV first to get recommendations' : (showAll ? 'Show only roles matching your CV skills' : 'Show every role in the catalog')}
           >
-            <IconSearch size={13} /> {suggestOnly ? 'Showing recommended…' : noCvSkills ? 'Recommended needs a CV' : 'Suggested for your skills'}
+            <IconSearch size={13} /> {noCvSkills ? 'Recommended needs a CV' : (showAll ? 'Showing all roles' : 'Best matches for your skills')}
           </button>
         </div>
         <p className="card-sub">Select one as your Target Career to see your gap map and match score. Catalog roles are reference skill profiles you can aim at.</p>
@@ -187,7 +191,7 @@ function StudentBrowse({ student }: { student?: Student }) {
               onSelect={() => chooseTarget(r.id)}
             />
           ))}
-          {filtered.length === 0 && <div className="empty">{suggestOnly ? 'No roles match your current CV skills. Try browsing all roles.' : 'No roles match your search.'}</div>}
+          {filtered.length === 0 && <div className="empty">{noCvSkills ? 'No roles match your search.' : 'No roles match your current CV skills. Try "Showing all roles" to browse the full catalog.'}</div>}
         </div>
       </div>
       <ToastRegion toasts={toast.toasts} dismiss={toast.dismiss} />
@@ -197,7 +201,7 @@ function StudentBrowse({ student }: { student?: Student }) {
 
 // ------------------------------------------------------------------ Company roles
 function CompanyRoles({ company }: { company?: any }) {
-  const { roles, setRoles, skills, loaded } = useRoles()
+  const { roles, setRoles, skills, loaded, loadError } = useRoles()
   const [editing, setEditing] = useState<any>(null)
   const [showForm, setShowForm] = useState(false)
   const [confirmRole, setConfirmRole] = useState<RoleRecord | null>(null)
@@ -266,6 +270,7 @@ function CompanyRoles({ company }: { company?: any }) {
 
   return (
     <div>
+      {loadError && <div className="error" style={{ marginBottom: 12 }}>{loadError}</div>}
       <div className="flex between mb">
         <h3 style={{ fontSize: 17 }}>My company roles</h3>
         <button className="btn btn-primary" onClick={openNew}><IconPlus size={15} /> Define role</button>
@@ -348,10 +353,11 @@ function CompanyRoles({ company }: { company?: any }) {
 
 // ------------------------------------------------------------------ Read-only (university)
 function ReadOnlyBrowse() {
-  const { roles, catalog } = useRoles()
+  const { roles, catalog, loadError } = useRoles()
   const all = mergeRoles(roles, catalog)
   return (
     <div className="card">
+      {loadError && <div className="error" style={{ marginBottom: 12 }}>{loadError}</div>}
       <div className="flex between">
         <h3>Roles across the cohort &amp; catalog</h3>
         <span className="chip chip-catalog"><IconRoles size={13} /> Catalog references included</span>

@@ -189,3 +189,65 @@ export const IconClock = (p: IconProps) => (
     <circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" />
   </svg>
 )
+export const IconMail = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <rect x="3" y="5" width="18" height="14" rx="2" /><path d="M3 7l9 6 9-6" />
+  </svg>
+)
+export const IconLock = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <rect x="4" y="10" width="16" height="11" rx="2" /><path d="M8 10V7a4 4 0 0 1 8 0v3" />
+  </svg>
+)
+export const IconEye = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6-10-6-10-6z" /><circle cx="12" cy="12" r="3" />
+  </svg>
+)
+export const IconLightbulb = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M9 18h6M10 22h4" /><path d="M12 2a7 7 0 0 0-4 12.7c.6.5 1 1.3 1 2.1V17h6v-.2c0-.8.4-1.6 1-2.1A7 7 0 0 0 12 2z" />
+  </svg>
+)
+export const IconBook = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M4 4h6a3 3 0 0 1 3 3v13a3 3 0 0 0-3-3H4V4z" /><path d="M20 4h-6a3 3 0 0 0-3 3v13a3 3 0 0 1 3-3h6V4z" />
+  </svg>
+)
+export const IconClipboard = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <rect x="5" y="4" width="14" height="17" rx="2" /><path d="M9 4a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2" />
+    <path d="M9 11l2 2 4-4" />
+  </svg>
+)
+export const IconStar = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M12 3l2.6 5.5 6 .8-4.4 4.3 1.1 6-5.3-2.9-5.3 2.9 1.1-6L3.4 9.3l6-.8L12 3z" />
+  </svg>
+)
+export const IconSparkles = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M12 3l1.6 4.4L18 9l-4.4 1.6L12 15l-1.6-4.4L6 9l4.4-1.6L12 3z" />
+    <path d="M18.5 14l.8 2.2L21.5 17l-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2z" />
+  </svg>
+)
+export const IconTarget = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <circle cx="12" cy="12" r="9" /><circle cx="12" cy="12" r="5" /><circle cx="12" cy="12" r="1.2" fill="currentColor" />
+  </svg>
+)
+export const IconUsers = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <circle cx="9" cy="8" r="3.2" /><path d="M3 20c0-3.3 2.7-5 6-5s6 1.7 6 5" /><path d="M16 4.5a3.2 3.2 0 0 1 0 6.3M18 15.5c1.7.8 3 2.2 3 4.5" />
+  </svg>
+)
+export const IconBell = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M6 9a6 6 0 0 1 12 0c0 4 1.5 5.5 1.5 5.5H4.5S6 13 6 9z" /><path d="M10 18a2 2 0 0 0 4 0" />
+  </svg>
+)
+export const IconTutor = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)}>
+    <path d="M4 6h16M4 12h10M4 18h7" /><path d="M18 18l-2 4 4-2 3 1 1-4-4-1-2 2z" />
+  </svg>
+)

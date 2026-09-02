@@ -24,6 +24,11 @@ export interface UniversityOption {
   universities: string[]
 }
 
+export interface LocationOption {
+  country: string
+  cities: string[]
+}
+
 export interface Skill {
   id: number
   name: string

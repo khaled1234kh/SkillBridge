@@ -1,9 +1,10 @@
 import React, { useEffect, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
-import type { GoogleConfig, UniversityOption } from '../lib/types'
-import { IconUser, IconGoogle, IconShield, IconUniversity, IconCheck, IconAlert } from '../components/Icons'
+import type { GoogleConfig, LocationOption, UniversityOption } from '../lib/types'
+import { IconUser, IconGoogle, IconShield, IconUniversity, IconCheck, IconAlert, IconMail, IconLock } from '../components/Icons'
 import { PasswordInput, ToastRegion, useToast } from '../components/ui'
+import SkillBridgeJourneyHero, { STUDENT_JOURNEY } from '../components/SkillBridgeJourneyHero'
 
 type Mode = 'signin' | 'signup' | 'reset' | 'google-role' | 'google-demo'
 
@@ -14,32 +15,52 @@ export default function LoginPage() {
   const [verify, setVerify] = useState<{ token: string; status: 'pending' | 'ok' | 'error' } | null>(null)
 
   useEffect(() => {
-    api.googleConfig().then(setGoogle).catch(() => {})
+    api.googleConfig()
+      .then(setGoogle)
+      .catch((e) => { console.error('[login] google config failed:', e) })
     const token = new URLSearchParams(window.location.search).get('token')
     if (token) {
       setVerify({ token, status: 'pending' })
       api.verifyEmail(token)
         .then(() => setVerify({ token, status: 'ok' }))
-        .catch(() => setVerify({ token, status: 'error' }))
+        .catch((e) => { console.error('[login] email verify failed:', e); setVerify({ token, status: 'error' }) })
     }
   }, [])
 
   return (
-    <div className="login-wrap">
-      {verify && <VerifyBanner verify={verify} />}
-      <AuthCard mode={mode} setMode={setMode} login={login} signup={signup} google={google} />
+    <div className="login-split">
+      <aside className="login-hero-panel">
+        <div className="hero-logo">
+          <div className="brand-mark">S</div>
+          <span className="wordmark">SkillBridge</span>
+        </div>
+        <div className="hero-copy">
+          <h1 className="hero-headline">
+            Bridge your skills<br />to <span className="accent">your future.</span>
+          </h1>
+          <p className="hero-sub">SkillBridge connects what you learn<br />with real-world opportunities.</p>
+        </div>
+        <SkillBridgeJourneyHero data={STUDENT_JOURNEY} />
+      </aside>
+
+      <main className="login-form-panel">
+        <div className="login-card-wrap">
+          {verify && <VerifyBanner verify={verify} />}
+          <AuthCard mode={mode} setMode={setMode} login={login} signup={signup} google={google} />
+        </div>
+      </main>
     </div>
   )
 }
 
 function VerifyBanner({ verify }: { verify: { token: string; status: 'pending' | 'ok' | 'error' } }) {
   if (verify.status === 'pending') {
-    return <div className="info" style={{ maxWidth: 420, marginBottom: 12, justifyContent: 'center' }}><IconShield size={16} /> Verifying your email…</div>
+    return <div className="info" style={{ marginBottom: 14, justifyContent: 'center' }}><IconShield size={16} /> Verifying your email…</div>
   }
   if (verify.status === 'ok') {
-    return <div className="info ok" style={{ maxWidth: 420, marginBottom: 12, justifyContent: 'center' }}><IconCheck size={16} /> Your email is verified. You can now sign in.</div>
+    return <div className="info ok" style={{ marginBottom: 14, justifyContent: 'center' }}><IconCheck size={16} /> Your email is verified. You can now sign in.</div>
   }
-  return <div className="error" style={{ maxWidth: 420, marginBottom: 12, marginLeft: 'auto', marginRight: 'auto' }}>This verification link is invalid or has expired.</div>
+  return <div className="error" style={{ marginBottom: 14 }}>This verification link is invalid or has expired.</div>
 }
 
 function AuthCard({ mode, setMode, login, signup, google }: any) {
@@ -53,9 +74,9 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
   const [industry, setIndustry] = useState('')
   const [location, setLocation] = useState('')
   const [universities, setUniversities] = useState<UniversityOption[]>([])
+  const [locations, setLocations] = useState<LocationOption[]>([])
   const [verifyNotice, setVerifyNotice] = useState('')
   const [pending, setPending] = useState<any>(null)
-  const [resetToken, setResetToken] = useState('')
   const [error, setError] = useState('')
   const [info, setInfo] = useState('')
   const [busy, setBusy] = useState(false)
@@ -63,7 +84,12 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
   const toast = useToast()
 
   useEffect(() => {
-    api.universities().then(setUniversities).catch(() => {})
+    api.universities()
+      .then(setUniversities)
+      .catch((e) => { console.error('[signup] universities failed:', e); setFieldErrs((f) => ({ ...f, country: 'Could not load universities.' })) })
+    api.locations()
+      .then(setLocations)
+      .catch((e) => { console.error('[signup] locations failed:', e) })
   }, [])
 
   const switchMode = (m: Mode) => { setMode(m); setError(''); setInfo(''); setVerifyNotice(''); setFieldErrs({}) }
@@ -71,6 +97,11 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
   const selectedCountryUnis = () => {
     const g = universities.find((x) => x.country === country)
     return g ? g.universities : []
+  }
+
+  const selectedCountryCities = () => {
+    const g = locations.find((x) => x.country === country)
+    return g ? g.cities : []
   }
 
   const doLogin = async (e?: React.FormEvent) => {
@@ -120,20 +151,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
     try {
       const r = await api.resetRequest(email.trim())
       setInfo(r.message || 'Check your email for a reset link.')
-      if (r.reset_token) setResetToken(r.reset_token)
-      else setMode('reset')
-    } catch (err: any) { setError(err.message) }
-    finally { setBusy(false) }
-  }
-
-  const doResetConfirm = async (e?: React.FormEvent) => {
-    e?.preventDefault()
-    setError(''); setBusy(true)
-    try {
-      await api.resetConfirm(resetToken.trim(), password)
-      setInfo('Password updated. Sign in with your new password.')
-      toast.push('Password updated successfully.', 'success')
-      setMode('signin')
+      setMode('reset')
     } catch (err: any) { setError(err.message) }
     finally { setBusy(false) }
   }
@@ -177,14 +195,13 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
   }
 
   return (
-    <div className="card login-card">
-      <div className="login-hero">
-        <p className="eyebrow">Bridge university learning to real-world work</p>
-        <h1>SkillBridge</h1>
-        <p>One account for students, companies, and university administration.</p>
-      </div>
+    <div className="login-card">
+      <h1 className="lc-heading">{mode === 'signin' ? 'Welcome back' : mode === 'signup' ? 'Create your account' : 'Account recovery'}</h1>
+      <p className="lc-sub">
+        {mode === 'signin' ? 'Bridge university learning to real-world work.' : mode === 'signup' ? 'Join students, companies, and universities on one platform.' : 'We\u2019ll send you a link to reset your password.'}
+      </p>
 
-      {(mode === 'signin' || mode === 'signup') && (
+      {mode === 'signup' && (
         <div className="tabs">
           <button className={mode === 'signin' ? 'active' : ''} onClick={() => switchMode('signin')}>Sign in</button>
           <button className={mode === 'signup' ? 'active' : ''} onClick={() => switchMode('signup')}>Create account</button>
@@ -193,23 +210,30 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
 
       {mode === 'signin' && (
         <form onSubmit={doLogin} noValidate>
-          <div className={`field ${fieldErrs.email ? 'invalid' : ''}`}><label>Email</label>
-            <input value={email} onChange={(e) => { setEmail(e.target.value); if (fieldErrs.email) setFieldErrs((f) => ({ ...f, email: '' })) }} autoComplete="email" placeholder="you@example.com" />
+          <div className={`field ${fieldErrs.email ? 'invalid' : ''}`}><label>Email address</label>
+            <div className="field-icon-wrap">
+              <IconMail size={16} className="field-icon" />
+              <input value={email} onChange={(e) => { setEmail(e.target.value); if (fieldErrs.email) setFieldErrs((f) => ({ ...f, email: '' })) }} autoComplete="email" placeholder="you@example.com" />
+            </div>
             {fieldErrs.email && <span className="field-err">{fieldErrs.email}</span>}</div>
           <div className={`field ${fieldErrs.password ? 'invalid' : ''}`}><label>Password</label>
-            <PasswordInput value={password} onChange={(v) => { setPassword(v); if (fieldErrs.password) setFieldErrs((f) => ({ ...f, password: '' })) }} autoComplete="current-password" />
+            <PasswordInput value={password} onChange={(v) => { setPassword(v); if (fieldErrs.password) setFieldErrs((f) => ({ ...f, password: '' })) }} autoComplete="current-password" icon={<IconLock size={16} className="field-icon" />} />
             {fieldErrs.password && <span className="field-err">{fieldErrs.password}</span>}</div>
           {error && <div className="error">{error}</div>}
-          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
-            <IconUser size={15} /> {busy ? 'Signing in…' : 'Sign in'}
-          </button>
-          <div className="login-links">
+          <div className="login-remember-row">
+            <label><input type="checkbox" /> Remember me</label>
             <button type="button" className="link" onClick={() => switchMode('reset')}>Forgot password?</button>
           </div>
-          <div className="divider" />
+          <button className="btn btn-primary btn-signin" disabled={busy}>
+            <IconUser size={15} /> {busy ? 'Signing in…' : 'Sign in'}
+          </button>
+          <div className="divider">or continue with</div>
           <button type="button" className="btn btn-google" onClick={doGoogle}>
             <IconGoogle size={16} /> {google?.configured ? 'Continue with Google' : 'Continue with Google (demo)'}
           </button>
+          <div className="login-footer-line">
+            Don't have an account? <button type="button" className="link" onClick={() => switchMode('signup')}>Create account</button>
+          </div>
         </form>
       )}
 
@@ -232,18 +256,29 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
               <option value="University Admin">University administration</option>
             </select>
           </div>
-          <div className={`field ${fieldErrs.location ? 'invalid' : ''}`}><label>City (location) <span className="muted small">roles near you</span></label>
-            <input value={location} onChange={(e) => { setLocation(e.target.value); if (fieldErrs.location) setFieldErrs((f) => ({ ...f, location: '' })) }} autoComplete="address-level2" placeholder="e.g. Birmingham" />
-            {fieldErrs.location && <span className="field-err">{fieldErrs.location}</span>}</div>
-          {(role === 'Student' || role === 'University Admin') && (
+          {role === 'Company' ? (
+            <div className={`field ${fieldErrs.location ? 'invalid' : ''}`}><label>City (location) <span className="muted small">roles near you</span></label>
+              <input value={location} onChange={(e) => { setLocation(e.target.value); if (fieldErrs.location) setFieldErrs((f) => ({ ...f, location: '' })) }} autoComplete="address-level2" placeholder="e.g. Birmingham" />
+              {fieldErrs.location && <span className="field-err">{fieldErrs.location}</span>}</div>
+          ) : (
             <div className="university-picker">
               <div className="field">
                 <label>Country</label>
-                <select value={country} onChange={(e) => { setCountry(e.target.value); setUniversity(''); setCustomUniversity('') }}>
+                <select value={country} onChange={(e) => { setCountry(e.target.value); setLocation(''); setUniversity(''); setCustomUniversity('') }}>
                   <option value="">Select a country…</option>
                   {universities.map((u) => <option key={u.country} value={u.country}>{u.country}</option>)}
                 </select>
               </div>
+              {country && (
+                <div className={`field ${fieldErrs.location ? 'invalid' : ''}`}>
+                  <label>City</label>
+                  <select value={location} onChange={(e) => { setLocation(e.target.value); if (fieldErrs.location) setFieldErrs((f) => ({ ...f, location: '' })) }}>
+                    <option value="">Select a city…</option>
+                    {selectedCountryCities().map((ct) => <option key={ct} value={ct}>{ct}</option>)}
+                  </select>
+                  {fieldErrs.location && <span className="field-err">{fieldErrs.location}</span>}
+                </div>
+              )}
               {country && (
                 <div className="field">
                   <label>University</label>
@@ -269,7 +304,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
           )}
           {verifyNotice && <div className="info" style={{ whiteSpace: 'normal' }}><IconShield size={15} /> {verifyNotice}</div>}
           {error && <div className="error">{error}</div>}
-          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
+          <button className="btn btn-primary btn-signin" disabled={busy}>
             {busy ? 'Creating account…' : 'Create account'}
           </button>
           <div className="login-links">
@@ -279,20 +314,13 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
       )}
 
       {mode === 'reset' && (
-        <form onSubmit={resetToken ? doResetConfirm : doResetRequest}>
+        <form onSubmit={doResetRequest}>
           <div className="field"><label>Email</label>
             <input value={email} onChange={(e) => setEmail(e.target.value)} autoComplete="email" /></div>
-          {resetToken && (
-            <>
-              <div className="field"><label>New password</label>
-                <PasswordInput value={password} onChange={setPassword} autoComplete="new-password" /></div>
-              <div className="info"><IconShield size={15} /> Your reset token: <code>{resetToken.slice(0, 12)}…</code></div>
-            </>
-          )}
           {info && <div className="info">{info}</div>}
           {error && <div className="error">{error}</div>}
-          <button className="btn btn-primary" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
-            {resetToken ? 'Set new password' : 'Send reset link'}
+          <button className="btn btn-primary btn-signin" disabled={busy}>
+            Send reset link
           </button>
           <div className="login-links">
             <button type="button" className="link" onClick={() => switchMode('signin')}>Back to sign in</button>
@@ -307,7 +335,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
           <div className="field"><label>Display name</label>
             <input value={displayName} onChange={(e) => setDisplayName(e.target.value)} /></div>
           {error && <div className="error">{error}</div>}
-          <button className="btn btn-google" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
+          <button className="btn btn-google" disabled={busy}>
             <IconGoogle size={16} /> {busy ? 'Continuing…' : 'Continue with Google'}
           </button>
         </form>
@@ -317,25 +345,36 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
         <form onSubmit={doGoogleRole} noValidate>
           <div className="info">You're new here — pick the account type for <strong>{pending?.email}</strong>.</div>
           <div className="field"><label>I am a…</label>
-            <select value={role} onChange={(e) => { setRole(e.target.value); setCountry(''); setUniversity(''); setCustomUniversity(''); setIndustry('') }}>
+            <select value={role} onChange={(e) => { setRole(e.target.value); setCountry(''); setLocation(''); setUniversity(''); setCustomUniversity(''); setIndustry('') }}>
               <option value="Student">Student seeking roles</option>
               <option value="Company">Company hiring talent</option>
               <option value="University Admin">University administration</option>
             </select>
           </div>
-          <div className={`field ${fieldErrs.location ? 'invalid' : ''}`}><label>City (location) <span className="muted small">roles near you</span></label>
-            <input value={location} onChange={(e) => { setLocation(e.target.value); if (fieldErrs.location) setFieldErrs((f) => ({ ...f, location: '' })) }} autoComplete="address-level2" placeholder="e.g. Birmingham" />
-            {fieldErrs.location && <span className="field-err">{fieldErrs.location}</span>}</div>
-          {(role === 'Student' || role === 'University Admin') && (
+          {role === 'Company' ? (
+            <div className={`field ${fieldErrs.location ? 'invalid' : ''}`}><label>City (location) <span className="muted small">roles near you</span></label>
+              <input value={location} onChange={(e) => { setLocation(e.target.value); if (fieldErrs.location) setFieldErrs((f) => ({ ...f, location: '' })) }} autoComplete="address-level2" placeholder="e.g. Birmingham" />
+              {fieldErrs.location && <span className="field-err">{fieldErrs.location}</span>}</div>
+          ) : (
             <div className="university-picker">
               <div className={`field ${fieldErrs.country ? 'invalid' : ''}`}>
                 <label>Country</label>
-                <select value={country} onChange={(e) => { setCountry(e.target.value); setUniversity(''); setCustomUniversity(''); if (fieldErrs.country) setFieldErrs((f) => ({ ...f, country: '' })) }}>
+                <select value={country} onChange={(e) => { setCountry(e.target.value); setLocation(''); setUniversity(''); setCustomUniversity(''); if (fieldErrs.country) setFieldErrs((f) => ({ ...f, country: '' })) }}>
                   <option value="">Select a country…</option>
                   {universities.map((u) => <option key={u.country} value={u.country}>{u.country}</option>)}
                 </select>
                 {fieldErrs.country && <span className="field-err">{fieldErrs.country}</span>}
               </div>
+              {country && (
+                <div className={`field ${fieldErrs.location ? 'invalid' : ''}`}>
+                  <label>City</label>
+                  <select value={location} onChange={(e) => { setLocation(e.target.value); if (fieldErrs.location) setFieldErrs((f) => ({ ...f, location: '' })) }}>
+                    <option value="">Select a city…</option>
+                    {selectedCountryCities().map((ct) => <option key={ct} value={ct}>{ct}</option>)}
+                  </select>
+                  {fieldErrs.location && <span className="field-err">{fieldErrs.location}</span>}
+                </div>
+              )}
               {country && (
                 <div className={`field ${fieldErrs.university ? 'invalid' : ''}`}>
                   <label>University</label>
@@ -361,7 +400,7 @@ function AuthCard({ mode, setMode, login, signup, google }: any) {
               {fieldErrs.industry && <span className="field-err">{fieldErrs.industry}</span>}</div>
           )}
           {error && <div className="error">{error}</div>}
-          <button className="btn btn-google" style={{ width: '100%', justifyContent: 'center' }} disabled={busy}>
+          <button className="btn btn-google" disabled={busy}>
             <IconGoogle size={16} /> Create account
           </button>
           <div className="login-links">

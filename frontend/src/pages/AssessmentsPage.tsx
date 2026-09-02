@@ -1,9 +1,9 @@
 import React, { useEffect, useRef, useState } from 'react'
 import { useApp } from '../AppContext'
 import { api } from '../lib/api'
-import type { Analysis, AssessmentAttempt, IntegrityFlag, QuizQuestion, Skill } from '../lib/types'
+import type { Analysis, AssessmentAttempt, IntegrityFlag, LearningItem, QuizQuestion, Skill } from '../lib/types'
 import { GapPill } from '../components/widgets'
-import { IconAssessment, IconAlert, IconFlag, IconCheck, IconTrophy, IconClock } from '../components/Icons'
+import { IconAssessment, IconAlert, IconFlag, IconCheck, IconTrophy, IconClock, IconRoadmap } from '../components/Icons'
 import { ToastRegion, useToast } from '../components/ui'
 
 function shuffle<T>(arr: T[]): T[] {
@@ -21,13 +21,24 @@ export default function AssessmentsPage() {
   const [attempts, setAttempts] = useState<AssessmentAttempt[]>([])
   const [keepIds, setKeepIds] = useState<Set<number>>(new Set())
   const [allSkills, setAllSkills] = useState<Skill[]>([])
+  const [learning, setLearning] = useState<LearningItem[]>([])
+  const [loadError, setLoadError] = useState('')
   const toast = useToast()
 
   useEffect(() => {
     if (me?.student?.id) {
-      api.analysis(me.student.id).then(setAnalysis).catch(() => {})
-      api.studentAssessments(me.student.id).then(setAttempts).catch(() => {})
-      api.skills().then(setAllSkills).catch(() => {})
+      api.analysis(me.student.id)
+        .then(setAnalysis)
+        .catch((e) => { console.error('[assessments] analysis failed:', e); setLoadError((p) => p || ('Failed to load gap analysis: ' + (e.message || e))) })
+      api.studentAssessments(me.student.id)
+        .then(setAttempts)
+        .catch((e) => { console.error('[assessments] history failed:', e); setLoadError((p) => p || ('Failed to load history: ' + (e.message || e))) })
+      api.skills()
+        .then(setAllSkills)
+        .catch((e) => { console.error('[assessments] skills failed:', e); setLoadError((p) => p || ('Failed to load skills: ' + (e.message || e))) })
+      api.learning(me.student.id)
+        .then(setLearning)
+        .catch((e) => { console.error('[assessments] learning failed:', e) })
     }
   }, [me])
 
@@ -44,16 +55,29 @@ export default function AssessmentsPage() {
   const browseSkills = allSkills.filter((s) => !gapSkillIds.has(s.id) || !renderedGaps.find((g) => g.skill_id === s.id))
   const showBrowse = viableSkills.length === 0 && allSkills.length > 0
 
+  // Roadmap gate: know whether the student has a generated learning path for a
+  // skill and whether every roadmap step is marked complete. Assessments are
+  // locked until the roadmap for that skill is finished.
+  const skillGate = (skillId: number) => {
+    const item = learning.find((i) => i.skill_id === skillId)
+    const steps = item?.roadmap?.steps?.length ?? 0
+    const done = item?.progress?.length ?? 0
+    if (!item || steps === 0) return { blocked: false, steps, done, hasItem: false, complete: true }
+    return { blocked: done < steps, steps, done, hasItem: true, complete: done >= steps }
+  }
+
   const renderGap = (g: any) => {
     const last = attempts.filter((a) => a.skill_id === g.skill_id).sort((a, b) => b.id - a.id)[0]
+    const gate = skillGate(g.skill_id)
     return (
       <AssessmentStarter
         key={g.skill_id}
         gap={g}
         lastAttempt={last}
+        gate={gate}
         onActivate={() => keep(g.skill_id)}
         onDeactivate={() => release(g.skill_id)}
-        onDone={() => { refreshStudent(); api.analysis(me.student!.id).then(setAnalysis); api.studentAssessments(me.student!.id).then(setAttempts) }}
+        onDone={() => { refreshStudent(); api.analysis(me.student!.id).then(setAnalysis); api.studentAssessments(me.student!.id).then(setAttempts); api.learning(me.student!.id).then(setLearning) }}
         onError={(m) => toast.push(m, 'error')}
         onSuccess={(m) => toast.push(m)}
       />
@@ -63,6 +87,7 @@ export default function AssessmentsPage() {
   return (
     <div className="grid grid-2">
       <div className="card">
+        {loadError && <div className="error" style={{ marginBottom: 12 }}><IconAlert size={15} /> {loadError}</div>}
         <h3>Verify a skill</h3>
         <p className="card-sub">Take a proctored 10-question assessment to move a skill from self-reported to Verified.</p>
         {renderedGaps.length === 0 && !showBrowse && (
@@ -85,9 +110,10 @@ export default function AssessmentsPage() {
                     key={s.id}
                     gap={{ skill_id: s.id, skill_name: s.name, category: s.category, required_level: 'Intermediate', student_level: null, status: 'missing', verified: false }}
                     lastAttempt={last}
+                    gate={skillGate(s.id)}
                     onActivate={() => {}}
                     onDeactivate={() => {}}
-                    onDone={() => { refreshStudent(); api.studentAssessments(me.student!.id).then(setAttempts) }}
+                    onDone={() => { refreshStudent(); api.studentAssessments(me.student!.id).then(setAttempts); api.learning(me.student!.id).then(setLearning) }}
                     onError={(m) => toast.push(m, 'error')}
                     onSuccess={(m) => toast.push(m)}
                   />
@@ -124,7 +150,7 @@ export default function AssessmentsPage() {
 
 type Mode = 'idle' | 'quiz' | 'practice' | 'result'
 
-function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate, onError, onSuccess }: { gap: any; lastAttempt?: AssessmentAttempt; onDone: () => void; onActivate: () => void; onDeactivate: () => void; onError?: (m: string) => void; onSuccess?: (m: string) => void }) {
+function AssessmentStarter({ gap, lastAttempt, gate, onDone, onActivate, onDeactivate, onError, onSuccess }: { gap: any; lastAttempt?: AssessmentAttempt; gate?: { blocked: boolean; steps: number; done: number; hasItem: boolean; complete: boolean }; onDone: () => void; onActivate: () => void; onDeactivate: () => void; onError?: (m: string) => void; onSuccess?: (m: string) => void }) {
   const { me } = useApp()
   const [mode, setMode] = useState<Mode>('idle')
   const [questions, setQuestions] = useState<QuizQuestion[]>([])
@@ -159,9 +185,18 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
         setPracticeData(res)
         setMode('practice')
       } else {
-        setQuestions(res.questions)
-        setOptOrder(res.questions.map((q) => (q.type === 'multiple_choice' ? shuffle(q.options) : [])))
-        setAnswers(new Array(res.questions.length).fill(''))
+        // Shuffle the whole question order once per attempt (not just the option
+        // order), so the quiz is unpredictable across attempts.
+        const idx = res.questions.map((_, i) => i)
+        for (let i = idx.length - 1; i > 0; i--) {
+          const j = Math.floor(Math.random() * (i + 1))
+          ;[idx[i], idx[j]] = [idx[j], idx[i]]
+        }
+        const orderedQuestions = idx.map((i) => res.questions[i])
+        const orderedOpt = orderedQuestions.map((q) => (q.type === 'multiple_choice' ? shuffle(q.options) : []))
+        setQuestions(orderedQuestions)
+        setOptOrder(orderedOpt)
+        setAnswers(new Array(orderedQuestions.length).fill(''))
         startRef.current = Date.now()
         setMode('quiz')
       }
@@ -425,12 +460,23 @@ function AssessmentStarter({ gap, lastAttempt, onDone, onActivate, onDeactivate,
         <div>
           <strong>{gap.skill_name}</strong>
           <div className="small muted">Required: {gap.required_level}{lastAttempt ? ` · last score ${lastAttempt.score}%` : ''}</div>
+          {gate?.blocked && (
+            <div className="small" style={{ color: 'var(--amber)', marginTop: 4 }}>
+              <IconRoadmap size={13} /> Complete your roadmap first ({gate.done}/{gate.steps} steps).
+            </div>
+          )}
         </div>
         <div className="flex" style={{ gap: 6 }}>
           {lastAttempt && (
             <button className="btn btn-sm" onClick={() => start(true)}><IconTrophy size={14} /> Practice</button>
           )}
-          <button className="btn btn-primary btn-sm" onClick={() => start(false)}><IconAssessment size={14} /> Start assessment</button>
+          {gate?.blocked ? (
+            <button className="btn btn-sm" disabled title="Finish every step of your learning roadmap before taking the assessment">
+              <IconRoadmap size={14} /> Start assessment
+            </button>
+          ) : (
+            <button className="btn btn-primary btn-sm" onClick={() => start(false)}><IconAssessment size={14} /> Start assessment</button>
+          )}
         </div>
       </div>
     </div>

@@ -7,9 +7,19 @@ import LearningPage from './pages/LearningPage'
 import AssessmentsPage from './pages/AssessmentsPage'
 import UniversityPage from './pages/UniversityPage'
 import PublicProfilePage from './pages/PublicProfilePage'
-import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout } from './components/Icons'
+import { api } from './lib/api'
+import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout, IconAlert } from './components/Icons'
+import SuccessAnimationOverlay from './components/SuccessAnimationOverlay'
 
 type Section = 'dashboard' | 'skills' | 'learning' | 'assessments' | 'university'
+
+function avatarInitials(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean)
+  if (!parts.length) return '?'
+  const first = parts[0][0]
+  const last = parts.length > 1 ? parts[parts.length - 1][0] : ''
+  return (first + last).toUpperCase()
+}
 
 function NotFound() {
   return (
@@ -27,9 +37,14 @@ function NotFound() {
 }
 
 function Shell() {
-  const { session, me, logout } = useApp()
+  const { session, me, logout, authBanner, clearAuthBanner } = useApp()
   const [section, setSection] = React.useState<Section>('dashboard')
   const [navOpen, setNavOpen] = React.useState(false)
+  const [demo, setDemo] = React.useState<{ genai_enabled: boolean; email_configured: boolean } | null>(null)
+
+  React.useEffect(() => {
+    api.demoMode().then(setDemo).catch((e) => console.error('[app] demo-mode config failed:', e))
+  }, [])
 
   const titles: Record<Section, string> = {
     dashboard: 'Dashboard', skills: 'Skills & Roles', learning: 'Learning',
@@ -60,9 +75,10 @@ function Shell() {
       : role === 'Company'
         ? me?.company ? `Hiring at ${me.company.name}` : 'Company account'
         : 'Administrator'
-  const roleClass = role === 'Student' ? 'role-chip student' : role === 'Company' ? 'role-chip company' : 'role-chip university'
+  const roleClass = role === 'Student' ? 'student' : role === 'Company' ? 'company' : 'university'
 
   return (
+    <>
     <div className="app-shell">
       <a className="skip-link" href="#main-content">Skip to content</a>
       <aside className={`sidebar ${navOpen ? 'nav-open' : ''}`}>
@@ -92,8 +108,20 @@ function Shell() {
         </div>
       </aside>
       <div className="nav-backdrop" onClick={() => setNavOpen(false)} />
-      <main className="content" id="main-content">
-        <header className="topbar">
+        <main className="content" id="main-content">
+          {demo && (!demo.genai_enabled || !demo.email_configured) && (
+            <div className="demo-banner">
+              <IconAlert size={15} />
+              <span>
+                {!demo.genai_enabled && !demo.email_configured
+                  ? 'Demo mode: no GenAI API key or email (SMTP) configured — AI output uses the deterministic fallback and reset links are not emailed.'
+                  : !demo.genai_enabled
+                    ? 'Demo mode: no GenAI API key configured — AI-generated content uses the deterministic fallback.'
+                    : 'Demo mode: no email (SMTP) configured — password-reset links are not emailed.'}
+              </span>
+            </div>
+          )}
+          <header className="topbar">
           <div>
             <button className="nav-toggle" aria-label="Open menu" onClick={() => setNavOpen(true)}>☰</button>
             <div>
@@ -102,7 +130,11 @@ function Shell() {
             </div>
           </div>
           <div className="topbar-actions">
-            <span className={roleClass}>{roleLabel}</span>
+            <span className={`role-chip status-chip ${roleClass}`}>{roleLabel}</span>
+            <div className="user-chip" title={me?.display_name || session.display_name}>
+              <span className="avatar">{avatarInitials(me?.display_name || session.display_name)}</span>
+              <span className="user-chip-name">{me?.display_name || session.display_name}</span>
+            </div>
             <button className="btn btn-ghost" onClick={logout}><IconLogout size={16} /> Log out</button>
           </div>
         </header>
@@ -117,6 +149,10 @@ function Shell() {
         </footer>
       </main>
     </div>
+    {session && authBanner && (
+      <SuccessAnimationOverlay role={role} onDone={clearAuthBanner} />
+    )}
+    </>
   )
 }
 

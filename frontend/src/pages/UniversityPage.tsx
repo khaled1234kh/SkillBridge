@@ -13,7 +13,7 @@ export default function UniversityPage() {
 
   const load = () => {
     api.universityStats().then(setData).catch((e) => setError(e.message))
-    api.universityCohort().then(setCohort).catch(() => {})
+    api.universityCohort().then(setCohort).catch((e) => { console.error('[university] cohort failed:', e); setError((p) => p || (e.message || 'Failed to load cohort')) })
   }
   useEffect(load, [])
 

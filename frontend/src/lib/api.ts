@@ -1,7 +1,7 @@
 import type {
   ActivitySummary, Analysis, AssessmentAttempt, Candidate, CareerRoadmap, CohortResponse, Company, GeneratedAssessment,
   GoogleConfig, LearningItem, QuizQuestion, PublicProfile, RoleRecord, RolesResponse, RoleSkillCoverage, Skill, Student,
-  Session, TutorMessage, UniversityStatsResponse, UniversityOption, RecentJob,
+  Session, TutorMessage, UniversityStatsResponse, UniversityOption, RecentJob, LocationOption,
 } from './types'
 
 const BASE = ''
@@ -65,6 +65,8 @@ export const api = {
   verifyEmail: (token: string) =>
     req<{ ok: boolean }>('/api/auth/verify', { method: 'POST', body: JSON.stringify({ token }) }),
   universities: () => req<UniversityOption[]>('/api/universities'),
+  locations: () => req<LocationOption[]>('/api/locations'),
+  demoMode: () => req<{ genai_enabled: boolean; email_configured: boolean }>('/api/config/demo-mode'),
 
   // ---- catalog
   skills: () => req<Skill[]>('/api/skills'),
@@ -124,7 +126,13 @@ export const api = {
   universityConfirm: () => req<CohortResponse>('/api/university/cohort/confirm', { method: 'POST', body: JSON.stringify({ confirm: true }) }),
 
   // ---- recent jobs
-  recentJobs: () => req<{ source: 'live' | 'fallback'; jobs: RecentJob[] }>('/api/jobs/recent'),
+  recentJobs: (opts?: { location?: string; country?: string }) => {
+    const qs = new URLSearchParams()
+    if (opts?.location) qs.set('location', opts.location)
+    if (opts?.country) qs.set('country', opts.country)
+    const suffix = qs.toString() ? `?${qs.toString()}` : ''
+    return req<{ source: 'live' | 'fallback'; jobs: RecentJob[] }>(`/api/jobs/recent${suffix}`)
+  },
 
   // ---- full career roadmap
   careerRoadmap: (studentId: number) => req<CareerRoadmap>(`/api/students/${studentId}/career-roadmap`),

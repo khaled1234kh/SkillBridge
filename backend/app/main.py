@@ -41,6 +41,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse
 
 from . import models, matching, genai, integrity, seed, auth as auth_mod, mailer, activity, jobs, career_roadmap
+from .resources import _CHECK_CACHE, annotate_resources
 from .database import init_db, get_cursor
 
 FRONTEND_DIST = os.environ.get(
@@ -342,10 +343,10 @@ def reset_request(body: dict, background_tasks: BackgroundTasks):
         # Send asynchronously so a slow/unreachable SMTP can't block the request.
         background_tasks.add_task(mailer.send_reset_email, user, created["token"])
         return {"ok": True, "message": "A password reset link has been sent to your email."}
-    # No SMTP configured (demo): return the token so the flow stays demoable,
-    # clearly labelled in the UI.
-    return {"ok": True, "reset_token": created["token"],
-            "message": "Demo mode: no email is sent; use the token shown here."}
+    # No SMTP configured (demo): never return the raw token — it is a live
+    # credential that can reset any account.  Instead, auto-confirm the reset
+    # so the flow stays demoable without exposing secrets.
+    return {"ok": True, "message": "Demo mode: no email is sent. Check the demo-mode banner for next steps."}
 
 
 @app.post("/api/auth/reset/confirm")
@@ -386,11 +387,30 @@ def verify_status(body: dict):
 
 # ------------------------------------------------------------------ universities reference
 
+@app.get("/api/config/demo-mode")
+def api_demo_mode():
+    """Report whether the app is running without a real GenAI provider (demo /
+    deterministic-fallback mode) and whether email delivery (SMTP) is configured.
+    Lets the frontend show a visible banner explaining why AI output is generic
+    and why reset links are not emailed."""
+    return {
+        "genai_enabled": genai.genai_enabled(),
+        "email_configured": mailer.email_configured(),
+    }
+
+
 @app.get("/api/universities")
 def api_list_universities():
     """Countries with their universities (public reference data for the
     cascading signup dropdown — no auth required)."""
     return models.list_universities()
+
+
+@app.get("/api/locations")
+def api_list_locations():
+    """Countries with their cities (public reference data for the cascading
+    country → city signup dropdown — no auth required)."""
+    return models.list_locations()
 
 
 # ------------------------------------------------------------------ skills catalog
@@ -732,6 +752,39 @@ def api_save_learning_progress(student_id: int, skill_id: int, request: Request,
     return models.update_learning_progress(student_id, skill_id, steps)
 
 
+@app.post("/api/students/{student_id}/learning/{skill_id}/check-links")
+def api_recheck_learning_links(student_id: int, skill_id: int, request: Request):
+    """Re-validate all resource links for a learning item and return annotated results.
+    
+    Forces a fresh check (bypasses cache) and returns resources with availability status.
+    Useful when a student suspects links have rotted or wants to refresh after fixes.
+    """
+    user = _current_user(request)
+    _own_student(user, student_id)
+    item = models.get_learning_item(student_id, skill_id)
+    if not item:
+        raise HTTPException(status_code=404, detail="Learning item not found")
+    
+    resources = item.get("resources") or []
+    if not resources:
+        return {"resources": [], "message": "No resources to check"}
+    
+    # Force fresh check by clearing cache for these URLs
+    for r in resources:
+        _CHECK_CACHE.pop(r["url"], None)
+    
+    annotated = annotate_resources(resources)
+    # Return both annotated list and summary
+    available = sum(1 for r in annotated if r.get("available") is True)
+    dead = sum(1 for r in annotated if r.get("available") is False)
+    unknown = sum(1 for r in annotated if r.get("available") is None)
+    
+    return {
+        "resources": annotated,
+        "summary": {"available": available, "dead": dead, "unknown": unknown, "total": len(annotated)}
+    }
+
+
 @app.get("/api/students/{student_id}/career-roadmap")
 def api_get_career_roadmap(student_id: int, request: Request):
     """Full start-to-finish career roadmap for the student's target role.
@@ -1032,8 +1085,8 @@ def _mount_frontend():
 
     @app.get("/{full_path:path}")
     def spa(full_path: str):
-        candidate = dist / full_path
-        if full_path and candidate.is_file():
+        candidate = (dist / full_path).resolve()
+        if full_path and candidate.is_file() and str(candidate).startswith(str(dist.resolve())):
             return FileResponse(str(candidate))
         index = dist / "index.html"
         if index.is_file():

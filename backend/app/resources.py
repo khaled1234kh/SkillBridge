@@ -12,8 +12,12 @@ Two sources:
 
 Curated links are validated with a cheap HTTP check when the network is
 reachable; links that provably fail (4xx/5xx/connection refused) are dropped.
+For YouTube, a thumbnail probe is used since the watch page returns 200 even
+for removed/private videos.
 """
 import os
+import re
+from urllib.parse import urlparse, parse_qs
 
 YOUTUBE_API_KEY = os.environ.get("SKILLBRIDGE_YOUTUBE_API_KEY", "")
 
@@ -469,18 +473,132 @@ def _live(url, timeout=1.5):
     return ok
 
 
-def validate_live(resources):
-    """Drop links that provably fail; keep unverifiable (offline) links.
+def _youtube_video_id(url):
+    """Extract YouTube video ID from various URL formats."""
+    try:
+        parsed = urlparse(url)
+        if "youtube.com" in parsed.netloc:
+            if parsed.path == "/watch":
+                qs = parse_qs(parsed.query)
+                return qs.get("v", [None])[0]
+            if parsed.path.startswith("/embed/"):
+                return parsed.path.split("/")[2]
+            if parsed.path.startswith("/v/"):
+                return parsed.path.split("/")[2]
+        if "youtu.be" in parsed.netloc:
+            return parsed.path.lstrip("/")
+    except Exception:
+        pass
+    return None
 
-    Checks run concurrently with a short timeout and results are cached per
-    process so bulk seeding stays quick even fully offline.
+
+def _youtube_thumbnail_available(video_id, timeout=2.0):
+    """Check YouTube video availability via thumbnail endpoint.
+    
+    The mqdefault.jpg thumbnail returns 404 for deleted/private/removed videos,
+    unlike the watch page which returns 200 for most states.
+    """
+    if not video_id:
+        return None
+    thumb_url = f"https://img.youtube.com/vi/{video_id}/mqdefault.jpg"
+    try:
+        import httpx
+        r = httpx.head(thumb_url, follow_redirects=True, timeout=timeout)
+        if r.status_code == 404:
+            return False
+        if r.status_code < 400:
+            # Additional check: default thumbnail is 120x90, real thumbnails are larger
+            # but we'll trust the 404 signal
+            return True
+    except Exception:
+        pass
+    return None  # unknown/unverifiable
+
+
+def _resource_availability(url, timeout=2.0):
+    """Determine resource availability with YouTube-specific logic.
+    
+    Returns: True (available), False (dead), None (unknown/unverifiable)
+    """
+    video_id = _youtube_video_id(url)
+    if video_id:
+        yt_result = _youtube_thumbnail_available(video_id, timeout)
+        if yt_result is False:
+            return False
+        if yt_result is True:
+            return True
+        # YouTube video but thumbnail check inconclusive — fall through to HEAD
+    
+    # Fallback: generic HEAD check
+    cached = _CHECK_CACHE.get(url)
+    if cached is not None:
+        return cached
+    try:
+        import httpx
+        r = httpx.head(url, follow_redirects=True, timeout=timeout)
+        ok = r.status_code < 400
+    except Exception:
+        ok = True  # network unavailable — assume curated link is fine
+    _CHECK_CACHE[url] = ok
+    return ok
+
+
+def annotate_resources(resources):
+    """Annotate each resource with availability status.
+    
+    Returns list of resources with added 'available' field:
+      True  = confirmed available
+      False = confirmed dead/removed
+      None  = unknown (network down or inconclusive)
     """
     if not resources:
         return []
     from concurrent.futures import ThreadPoolExecutor
     with ThreadPoolExecutor(max_workers=16) as ex:
-        results = list(ex.map(lambda r: (r, _live(r["url"])), resources))
-    return [r for r, ok in results if ok]
+        # Check availability for each resource
+        avail_results = list(ex.map(lambda r: _resource_availability(r["url"]), resources))
+    
+    annotated = []
+    for r, avail in zip(resources, avail_results):
+        nr = dict(r)
+        nr["available"] = avail
+        annotated.append(nr)
+    return annotated
+
+
+def choose_live(resources, min_keep=1):
+    """Filter resources to only available ones, but keep at least min_keep per skill.
+    
+    Strategy:
+    - First, keep all confirmed available (True)
+    - If fewer than min_keep, add back unknown (None) resources
+    - Dead (False) resources are always dropped
+    - This ensures the UI always shows at least something, but prefers live links.
+    """
+    if not resources:
+        return []
+    
+    available = [r for r in resources if r.get("available") is True]
+    unknown = [r for r in resources if r.get("available") is None]
+    # Dead resources are always excluded
+    
+    if len(available) >= min_keep:
+        return available
+    
+    # Need to pad with unknown to reach min_keep
+    needed = min_keep - len(available)
+    return available + unknown[:needed]
+
+
+def validate_live(resources):
+    """Legacy wrapper: drop links that provably fail; keep unverifiable.
+    
+    Kept for backward compatibility with existing calls.
+    """
+    if not resources:
+        return []
+    annotated = annotate_resources(resources)
+    return [r for r in annotated if r.get("available") is not False]
 
 
 # ---------------------------------------------------------------- public API
@@ -499,6 +617,10 @@ def retrieve_resources(skill_name, category, target_role=None, live_check=True, 
     Videos first (fast context), then articles/docs, then full courses. When a
     live search key is set, current videos from the YouTube API merge in at the
     top; the curated index always provides genuine article/doc/course links.
+    
+    Resources are annotated with 'available' field (True/False/None) so the UI
+    can show dead-link badges. Dead links are dropped; at least 1 resource
+    per skill is kept (fallback to unknown-status links).
     """
     resources = curated_resources(skill_name, category)
     if YOUTUBE_API_KEY:
@@ -514,7 +636,9 @@ def retrieve_resources(skill_name, category, target_role=None, live_check=True, 
         merged.append(r)
 
     if live_check:
-        merged = validate_live(merged)
+        # Annotate with availability, then filter to live links (keep at least 1)
+        merged = annotate_resources(merged)
+        merged = choose_live(merged, min_keep=1)
 
     for i, r in enumerate(merged[:max_items], start=1):
         r["rank"] = i

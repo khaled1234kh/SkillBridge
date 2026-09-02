@@ -13,6 +13,7 @@ content — so the app remains fully demoable end to end without credentials.
 import difflib
 import json
 import os
+import random
 import re
 
 PROVIDER = "anthropic_model"
@@ -849,6 +850,51 @@ _TEMPLATE_QUESTIONS = [
 ]
 
 
+def _balance_mc_options(q):
+    """Reduce the 'longest answer is always correct' tell.
+
+    When the correct multiple-choice option is noticeably the longest, pad two or
+    three of the shorter distractors with a neutral clause and shuffle the option
+    order, so no option is predictably the answer by length or position.
+    """
+    if q.get("type") != "multiple_choice":
+        return q
+    opts = [str(o) for o in (q.get("options") or []) if str(o)]
+    ans = str(q.get("answer") or "")
+    if len(opts) < 3 or not ans:
+        return q
+    if ans not in opts:
+        return q
+    others = [o for o in opts if o != ans]
+    if not others:
+        return q
+    ans_len = len(ans)
+    if ans_len <= max(len(o) for o in others) + 6:
+        random.shuffle(opts)
+        q["options"] = opts
+        return q
+    fillers = [
+        " in typical real-world settings",
+        " as used in professional practice",
+        " when working on real projects",
+        " under realistic constraints",
+        " in day-to-day engineering work",
+    ]
+    fi = 0
+    balanced = []
+    for o in opts:
+        if o == ans:
+            balanced.append(o)
+        elif len(o) <= ans_len - 6 and fi < len(fillers):
+            balanced.append(o + fillers[fi])
+            fi += 1
+        else:
+            balanced.append(o)
+    random.shuffle(balanced)
+    q["options"] = balanced
+    return q
+
+
 def generate_quiz(skill_name, target_role=None, num_questions=10, difficulty="Intermediate"):
     difficulty = difficulty if difficulty in LEVELS else "Intermediate"
     system = (
@@ -911,13 +957,16 @@ def generate_quiz(skill_name, target_role=None, num_questions=10, difficulty="In
             mc_count += 1
         else:
             ft_count += 1
-        questions.append({
+        item = {
             "question": str(q["question"]),
             "type": qtype,
             "options": [str(o) for o in (q.get("options") or [])] if qtype == "multiple_choice" else [],
             "answer": str(q.get("answer") or ""),
             "explanation": str(q.get("explanation") or ""),
-        })
+        }
+        if qtype == "multiple_choice":
+            item = _balance_mc_options(item)
+        questions.append(item)
         if len(questions) >= num_questions:
             break
     if len(questions) < num_questions:
@@ -928,6 +977,7 @@ def generate_quiz(skill_name, target_role=None, num_questions=10, difficulty="In
                 ft_count += 1
             else:
                 mc_count += 1
+                q = _balance_mc_options(q)
             questions.append(q)
     return questions[:num_questions]
 

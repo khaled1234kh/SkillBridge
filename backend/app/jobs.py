@@ -217,9 +217,10 @@ def _score_job(job, keywords, student_seniority, country, role_family=""):
 
     # Country affinity — 10% of the score.
     job_country = _normalise_country(job.get("country") or job.get("location") or "")
+    user_country = _normalise_country(country)
     geo = 0
-    if country and job_country:
-        geo = 10 if job_country == country else 4
+    if user_country and job_country:
+        geo = 10 if job_country == user_country else 4
 
     score = max(0, min(100, int(round(relevance + exp + geo))))
 

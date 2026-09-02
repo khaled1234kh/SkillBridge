@@ -20,7 +20,7 @@ export default function PublicProfilePage({ studentId }: { studentId: number }) 
     setState('loading')
     api.publicProfile(studentId)
       .then((p) => { setProfile(p); setState('ready') })
-      .catch(() => setState('missing'))
+      .catch((e) => { console.error('[public-profile] load failed:', e); setState('missing') })
   }, [studentId])
 
   useEffect(() => {

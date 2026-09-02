@@ -29,13 +29,18 @@ function JobsCard() {
   const { me } = useApp()
   const [data, setData] = useState<{ source: string; jobs: RecentJob[] } | null>(null)
   const [tried, setTried] = useState(false)
+  const [err, setErr] = useState('')
   useEffect(() => {
     if (!me?.student?.id) return
     setData(null)
     setTried(false)
-    api.recentJobs()
+    setErr('')
+    const student = me.student as any
+    const location = student?.location || (me as any)?.location || ''
+    const country = student?.country || (me as any)?.country || ''
+    api.recentJobs({ location, country })
       .then((d) => { setData(d); setTried(true) })
-      .catch(() => { setData(null); setTried(true) })
+      .catch((e) => { console.error('[dashboard] recent jobs failed:', e); setErr(e.message || String(e)); setData(null); setTried(true) })
   }, [me?.student?.id])
 
   return (
@@ -49,6 +54,7 @@ function JobsCard() {
       <p className="card-sub" style={{ marginTop: 4 }}>
         Real, recent openings matched to your skills, ranked most fitting first. Senior roles are de-ranked for early-career profiles.
       </p>
+      {err && <div className="error" style={{ marginBottom: 10 }}>{err}</div>}
       {!tried ? (
         <div className="loading">Loading recent roles…</div>
       ) : data && data.jobs.length > 0 ? (
@@ -107,7 +113,9 @@ function StudentDashboard({ student, analysis, onNavigate }: { student?: Student
   const [shareOn, setShareOn] = useState(!!student?.share_public)
   const [copied, setCopied] = useState('')
   useEffect(() => {
-    if (student) api.studentActivity(student.id).then(setActivity).catch(() => {})
+    if (student) api.studentActivity(student.id)
+      .then(setActivity)
+      .catch((e) => { console.error('[dashboard] activity failed:', e) })
   }, [student?.id])
   useEffect(() => setShareOn(!!student?.share_public), [student?.share_public])
   if (!student) return <div className="empty">No student profile linked to this account.</div>
@@ -366,13 +374,19 @@ function CompanyDashboard() {
   const [coverage, setCoverage] = useState<Record<number, RoleSkillCoverage>>({})
 
   useEffect(() => {
-    api.roles().then((res) => setRoles(res.roles)).catch(() => {})
+    api.roles()
+      .then((res) => setRoles(res.roles))
+      .catch((e) => { console.error('[dashboard] roles failed:', e) })
   }, [])
 
   useEffect(() => {
     roles.forEach((r) => {
-      api.candidates(r.id).then((c) => setCandidates((prev) => ({ ...prev, [r.id]: c }))).catch(() => {})
-      api.roleSkillCoverage(r.id).then((c) => setCoverage((prev) => ({ ...prev, [r.id]: c }))).catch(() => {})
+      api.candidates(r.id)
+        .then((c) => setCandidates((prev) => ({ ...prev, [r.id]: c })))
+        .catch((e) => { console.error(`[dashboard] candidates for role ${r.id} failed:`, e) })
+      api.roleSkillCoverage(r.id)
+        .then((c) => setCoverage((prev) => ({ ...prev, [r.id]: c })))
+        .catch((e) => { console.error(`[dashboard] coverage for role ${r.id} failed:`, e) })
     })
   }, [roles])
 

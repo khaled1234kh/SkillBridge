@@ -6,6 +6,10 @@ import type { Analysis, CareerRoadmap, LearningItem, Student, TutorMessage } fro
 import { GapPill } from '../components/widgets'
 import { IconChevron, IconChat, IconSend, IconAssessment, IconExternal, IconRoadmap, IconCheck } from '../components/Icons'
 
+function SafeMarkdown({ children }: { children: React.ReactNode }) {
+  return <Markdown>{String(children ?? '')}</Markdown>
+}
+
 export default function LearningPage() {
   const { me, refreshStudent } = useApp()
   const studentId = me?.student?.id ?? 0
@@ -24,9 +28,9 @@ export default function LearningPage() {
 
   const load = async () => {
     try {
-      const [a, l] = await Promise.all([api.analysis(studentId), api.learning(studentId)])
-      setAnalysis(a)
-      setItems(l)
+      const [aResult, lResult] = await Promise.allSettled([api.analysis(studentId), api.learning(studentId)])
+      if (aResult.status === 'fulfilled') setAnalysis(aResult.value)
+      if (lResult.status === 'fulfilled') setItems(lResult.value)
     } catch {
       setItems([])
     }
@@ -155,15 +159,15 @@ function LearningRow({ gap, item, open, generating, onToggle, onGenerate, onTogg
           <>
             <section>
               <h5>Explanation</h5>
-              <div className="md-body"><Markdown>{item.explanation}</Markdown></div>
+              <div className="md-body"><SafeMarkdown>{item.explanation}</SafeMarkdown></div>
             </section>
             <section>
               <h5>Practice exercise</h5>
-              <div className="md-body"><Markdown>{item.practice_exercise}</Markdown></div>
+              <div className="md-body"><SafeMarkdown>{item.practice_exercise}</SafeMarkdown></div>
             </section>
             <section>
               <h5>Mini-project</h5>
-              <div className="md-body"><Markdown>{item.mini_project}</Markdown></div>
+              <div className="md-body"><SafeMarkdown>{item.mini_project}</SafeMarkdown></div>
             </section>
             {item.resources && item.resources.length > 0 && (
               <section>
@@ -239,7 +243,7 @@ function CareerRoadmapCard({ studentId, roleTitle }: { studentId: number; roleTi
   useEffect(() => {
     let alive = true
     if (!studentId) return
-    api.careerRoadmap(studentId).then((r) => { if (alive) setMap(r) }).catch(() => { if (alive) setMap(null) })
+    api.careerRoadmap(studentId).then((r) => { if (alive) setMap(r) }).catch((e) => { if (alive) { setMap(null); console.error('[learning] career roadmap failed:', e) } })
     return () => { alive = false }
   }, [studentId])
 
@@ -280,7 +284,7 @@ function CareerRoadmapCard({ studentId, roleTitle }: { studentId: number; roleTi
                     <div className="cr-deliverable-title">Deliverables</div>
                     {p.deliverables.map((d, i) => (
                       <div className="cr-deliverable" key={i}><span className="rm-checkbox" style={{ background: 'var(--navy)', borderColor: 'var(--navy)' }}>{i + 1}</span>
-                        <div className="md-body"><Markdown>{d}</Markdown></div></div>
+                        <div className="md-body"><SafeMarkdown>{d}</SafeMarkdown></div></div>
                     ))}
                   </div>
                   <div className="cr-check"><strong>Checkpoint:</strong> {p.checkpoint}</div>
@@ -372,7 +376,9 @@ function TutorPanel({ studentId, student, items }: { studentId: number; student?
   const scrollRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
-    api.tutorHistory(studentId).then(setMessages).catch(() => {})
+    api.tutorHistory(studentId)
+      .then(setMessages)
+      .catch((e) => { console.error('[learning] tutor history failed:', e) })
   }, [studentId])
 
   useEffect(() => {
@@ -442,7 +448,7 @@ function TutorPanel({ studentId, student, items }: { studentId: number; student?
               </div>
             )}
             {messages.map((m) => (
-              <div key={m.id} className={`msg ${m.role}`}><div className="md-body"><Markdown>{m.content}</Markdown></div></div>
+              <div key={m.id} className={`msg ${m.role}`}><div className="md-body"><SafeMarkdown>{m.content}</SafeMarkdown></div></div>
             ))}
             {busy && <div className="msg assistant">…</div>}
           </div>

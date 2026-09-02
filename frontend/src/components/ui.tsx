@@ -59,12 +59,13 @@ export function ConfirmModal({
 
 /* ---------------- Password input with visibility toggle ---------------- */
 
-export function PasswordInput({ value, onChange, autoComplete, placeholder }: {
-  value: string; onChange: (v: string) => void; autoComplete?: string; placeholder?: string
+export function PasswordInput({ value, onChange, autoComplete, placeholder, icon }: {
+  value: string; onChange: (v: string) => void; autoComplete?: string; placeholder?: string; icon?: React.ReactNode
 }) {
   const [show, setShow] = React.useState(false)
   return (
     <div className="pw-wrap">
+      {icon && <span className="pw-icon">{icon}</span>}
       <input
         type={show ? 'text' : 'password'}
         value={value}

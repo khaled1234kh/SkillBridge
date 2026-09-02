@@ -117,6 +117,75 @@ CATALOG_ROLES = [
       ("Power BI", "Intermediate", "Visualization"), ("Business Intelligence", "Intermediate", "Analytics"),
       ("Risk Assessment", "Intermediate", "Security"), ("A/B Testing", "Intermediate", "Analytics"),
       ("Communication", "Intermediate", "Soft Skills"), ("Time Management", "Beginner", "Soft Skills")]),
+    ("Backend Engineer",
+     "Design and build the server-side services and APIs that power products at scale.",
+     [("Python", "Advanced", "Programming"), ("Java", "Intermediate", "Programming"),
+      ("FastAPI", "Intermediate", "Programming"), ("SQL", "Advanced", "Data"),
+      ("REST APIs", "Advanced", "DevOps"), ("Docker", "Intermediate", "DevOps"),
+      ("Git", "Intermediate", "DevOps"), ("Kubernetes", "Beginner", "DevOps"),
+      ("SQLAlchemy", "Intermediate", "DevOps"), ("AWS", "Beginner", "DevOps"),
+      ("Problem Solving", "Intermediate", "Soft Skills"), ("Communication", "Beginner", "Soft Skills")]),
+    ("Frontend Developer",
+     "Build polished, accessible interfaces that turn product vision into working screens.",
+     [("JavaScript", "Advanced", "Programming"), ("TypeScript", "Advanced", "Programming"),
+      ("React", "Advanced", "Programming"), ("HTML/CSS", "Advanced", "Programming"),
+      ("REST APIs", "Intermediate", "DevOps"), ("Git", "Intermediate", "DevOps"),
+      ("Node.js", "Intermediate", "Programming"), ("Data Visualization", "Beginner", "Visualization"),
+      ("Communication", "Intermediate", "Soft Skills"), ("Problem Solving", "Intermediate", "Soft Skills"),
+      ("Teamwork", "Beginner", "Soft Skills")]),
+    ("DevOps / Platform Engineer",
+     "Own the infrastructure, automation, and reliability behind software delivery.",
+     [("Docker", "Advanced", "DevOps"), ("Kubernetes", "Intermediate", "DevOps"),
+      ("CI/CD", "Intermediate", "DevOps"), ("Terraform", "Intermediate", "DevOps"),
+      ("AWS", "Intermediate", "DevOps"), ("Linux", "Advanced", "DevOps"),
+      ("Git", "Intermediate", "DevOps"), ("Python", "Intermediate", "Programming"),
+      ("Cloud Security", "Beginner", "Security"), ("Problem Solving", "Intermediate", "Soft Skills")]),
+    ("Machine Learning Engineer",
+     "Take models from experiments to production, with monitoring and serving at scale.",
+     [("Python", "Advanced", "Programming"), ("Machine Learning", "Advanced", "AI"),
+      ("Deep Learning", "Intermediate", "AI"), ("PyTorch", "Intermediate", "AI"),
+      ("TensorFlow", "Beginner", "AI"), ("Statistics", "Advanced", "Data"),
+      ("Pandas", "Intermediate", "Data"), ("scikit-learn", "Intermediate", "AI"),
+      ("Docker", "Intermediate", "DevOps"), ("REST APIs", "Intermediate", "DevOps"),
+      ("Kubernetes", "Beginner", "DevOps"), ("AWS", "Beginner", "DevOps")]),
+    ("Data Scientist",
+     "Apply statistics and machine learning to model problems and drive decisions.",
+     [("Python", "Advanced", "Programming"), ("Statistics", "Advanced", "Data"),
+      ("Machine Learning", "Advanced", "AI"), ("SQL", "Advanced", "Data"),
+      ("Pandas", "Advanced", "Data"), ("NumPy", "Advanced", "Data"),
+      ("Data Visualization", "Intermediate", "Visualization"), ("scikit-learn", "Intermediate", "AI"),
+      ("Deep Learning", "Beginner", "AI"), ("A/B Testing", "Intermediate", "Analytics"),
+      ("Communication", "Intermediate", "Soft Skills"), ("Critical Thinking", "Advanced", "Soft Skills")]),
+    ("Cybersecurity Analyst",
+     "Monitor, investigate, and respond to security threats across the enterprise.",
+     [("Cybersecurity", "Advanced", "Security"), ("Network Security", "Intermediate", "Security"),
+      ("Threat Detection", "Intermediate", "Security"), ("Incident Response", "Intermediate", "Security"),
+      ("Vulnerability Management", "Intermediate", "Security"), ("SIEM", "Intermediate", "Security"),
+      ("Risk Assessment", "Intermediate", "Security"), ("Linux", "Beginner", "DevOps"),
+      ("Windows Server", "Beginner", "Security"), ("Active Directory", "Beginner", "Security"),
+      ("Communication", "Intermediate", "Soft Skills"), ("Critical Thinking", "Advanced", "Soft Skills")]),
+    ("Cloud Engineer",
+     "Architect and operate cloud infrastructure, ideally on AWS and Azure.",
+     [("AWS", "Advanced", "DevOps"), ("Azure", "Intermediate", "DevOps"),
+      ("Linux", "Advanced", "DevOps"), ("Docker", "Intermediate", "DevOps"),
+      ("Kubernetes", "Intermediate", "DevOps"), ("Terraform", "Intermediate", "DevOps"),
+      ("Cloud Security", "Intermediate", "Security"), ("CI/CD", "Intermediate", "DevOps"),
+      ("Python", "Beginner", "Programming"), ("Problem Solving", "Intermediate", "Soft Skills")]),
+    ("Business Intelligence Analyst",
+     "Turn operational metrics into dashboards that guide strategy and growth.",
+     [("SQL", "Advanced", "Data"), ("Excel", "Advanced", "Analytics"),
+      ("Power BI", "Advanced", "Visualization"), ("Tableau", "Intermediate", "Visualization"),
+      ("Business Intelligence", "Advanced", "Analytics"), ("Data Visualization", "Advanced", "Visualization"),
+      ("Pandas", "Intermediate", "Data"), ("Python", "Intermediate", "Programming"),
+      ("Data Storytelling", "Intermediate", "Analytics"), ("A/B Testing", "Beginner", "Analytics"),
+      ("Communication", "Advanced", "Soft Skills")]),
+    ("Product Analyst",
+     "Analyze user behavior to prioritize what the product team builds next.",
+     [("SQL", "Advanced", "Data"), ("Excel", "Advanced", "Analytics"),
+      ("A/B Testing", "Intermediate", "Analytics"), ("Statistics", "Intermediate", "Data"),
+      ("Data Analysis", "Advanced", "Data"), ("Data Storytelling", "Intermediate", "Analytics"),
+      ("Python", "Beginner", "Programming"), ("Pandas", "Beginner", "Data"),
+      ("Communication", "Advanced", "Soft Skills"), ("Critical Thinking", "Advanced", "Soft Skills")]),
 ]
 
 # Completed assessment attempts for richer seed data.
@@ -153,6 +222,23 @@ UNIVERSITIES = [
     ("Canada", ["University of Toronto", "University of Waterloo", "University of British Columbia",
                 "McGill University", "University of Alberta", "Simon Fraser University"]),
 ]
+
+
+# Country → city reference for the cascading signup dropdown. Also merged with
+# distinct locations already stored on users/companies so new real entries appear.
+CITIES = {
+    "United Kingdom": ["London", "Birmingham", "Manchester", "Edinburgh", "Leeds", "Glasgow",
+                       "Liverpool", "Bristol", "Sheffield", "Newcastle", "Nottingham", "Cardiff",
+                       "Belfast", "Southampton"],
+    "United States": ["New York", "San Francisco", "Seattle", "Austin", "Boston", "Chicago",
+                      "Los Angeles", "Denver", "Atlanta", "Washington DC", "Houston", "Portland"],
+    "United Arab Emirates": ["Dubai", "Abu Dhabi", "Sharjah", "Ajman", "Ras Al Khaimah"],
+    "Saudi Arabia": ["Riyadh", "Jeddah", "Dammam", "Khobar", "Mecca", "Medina"],
+    "Egypt": ["Cairo", "Alexandria", "Giza", "Mansoura", "Tanta", "Ismailia"],
+    "India": ["Mumbai", "Delhi", "Bengaluru", "Hyderabad", "Chennai", "Pune", "Kolkata", "Ahmedabad"],
+    "Germany": ["Berlin", "Munich", "Frankfurt", "Hamburg", "Stuttgart", "Cologne", "Dresden"],
+    "Canada": ["Toronto", "Vancouver", "Montreal", "Ottawa", "Calgary", "Edmonton", "Waterloo"],
+}
 
 
 def _sample_cv(name, email, university, skills):
@@ -209,9 +295,13 @@ def seed():
     # reference country + university list (used by the cascading signup dropdown)
     with get_cursor() as c:
         c.execute("DELETE FROM universities")
+        c.execute("DELETE FROM cities")
     for country, unis in UNIVERSITIES:
         for uni in unis:
             models.add_university(country, uni)
+    for country, cities in CITIES.items():
+        for city in cities:
+            models.add_city(country, city)
 
     # companies
     company_ids = {}
