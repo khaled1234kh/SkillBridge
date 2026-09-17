@@ -139,14 +139,29 @@ export const api = {
     const headers: Record<string, string> = {}
     const token = getToken()
     if (token) headers['Authorization'] = `Bearer ${token}`
-    const res = await fetch(`${BASE}/api/students/${studentId}/cv`, { method: 'POST', body: fd, headers })
-    if (!res.ok) {
-      let detail = 'CV upload failed'
-      try { const d = await res.json(); detail = d.detail || detail } catch { /* ignore */ }
-      if (res.status === 401) setToken(null)
-      throw new Error(detail)
+    const controller = new AbortController()
+    // CV extraction runs a provider call server-side; bound it client-side so
+    // "Extracting…" can never hang forever when the provider is slow/down.
+    const timer = window.setTimeout(() => controller.abort(), 50_000)
+    try {
+      const res = await fetch(`${BASE}/api/students/${studentId}/cv`, {
+        method: 'POST', body: fd, headers, signal: controller.signal,
+      })
+      if (!res.ok) {
+        let detail = 'CV upload failed'
+        try { const d = await res.json(); detail = d.detail || detail } catch { /* ignore */ }
+        if (res.status === 401) setToken(null)
+        throw new Error(detail)
+      }
+      return res.json()
+    } catch (e: any) {
+      if (controller.signal.aborted) {
+        throw new Error('CV extraction took too long — your existing profile was kept.')
+      }
+      throw e
+    } finally {
+      window.clearTimeout(timer)
     }
-    return res.json()
   },
 
   analysis: (studentId: number) => req<Analysis>(`/api/students/${studentId}/analysis`),
@@ -223,13 +238,15 @@ export const api = {
     req<{ cleared: boolean; tutor_id: string; conversation_id?: number | null }>(`/api/students/${studentId}/tutor`, { method: 'DELETE', body: JSON.stringify({ tutor_id: tutorId, conversation_id: conversationId ?? null }) }),
   tutorTts: (studentId: number, tutor: string, text: string) =>
     reqBlob(`/api/students/${studentId}/tutor/tts`, { method: 'POST', body: JSON.stringify({ tutor, text }) }),
-  tutorSend: (studentId: number, message: string, opts: { skillId?: number | null; page?: string; competency?: string | null; jobTitle?: string | null; jobUrl?: string | null; tutorId?: string | null; mode?: string | null; language?: string | null; conversationId?: number | null } = {}) =>
-    req<TutorMessage & { reply?: string; tutor_id?: string; mode?: string; language?: string; conversation_id?: number | null; conversation?: TutorConversation }>(`/api/students/${studentId}/tutor`, { method: 'POST', body: JSON.stringify({ message, skill_id: opts.skillId ?? null, page: opts.page ?? 'dashboard', competency: opts.competency ?? null, job_title: opts.jobTitle ?? null, job_url: opts.jobUrl ?? null, tutor_id: opts.tutorId ?? null, mode: opts.mode ?? null, language: opts.language ?? null, conversation_id: opts.conversationId ?? null }) }),
+  tutorStt: (studentId: number, audio: string, language: string) =>
+    req<{ text: string }>(`/api/students/${studentId}/tutor/stt`, { method: 'POST', body: JSON.stringify({ audio, language }) }),
+  tutorSend: (studentId: number, message: string, opts: { skillId?: number | null; page?: string; competency?: string | null; jobTitle?: string | null; jobUrl?: string | null; tutorId?: string | null; mode?: string | null; language?: string | null; conversationId?: number | null; spoken?: boolean } = {}) =>
+    req<TutorMessage & { reply?: string; tutor_id?: string; mode?: string; language?: string; conversation_id?: number | null; conversation?: TutorConversation }>(`/api/students/${studentId}/tutor`, { method: 'POST', body: JSON.stringify({ message, skill_id: opts.skillId ?? null, page: opts.page ?? 'dashboard', competency: opts.competency ?? null, job_title: opts.jobTitle ?? null, job_url: opts.jobUrl ?? null, tutor_id: opts.tutorId ?? null, mode: opts.mode ?? null, language: opts.language ?? null, conversation_id: opts.conversationId ?? null, spoken: opts.spoken === true }) }),
   tutorPreference: (studentId: number) => req<{ tutor_id: string; mode?: string; language?: string }>(`/api/students/${studentId}/tutor/preference`),
   // Abortable twin of tutorSend — the voice session cancels the in-flight tutor
   // request when the student speaks again. Same payload, same endpoint.
-  tutorSendAbortable: (studentId: number, message: string, opts: { skillId?: number | null; page?: string; competency?: string | null; jobTitle?: string | null; jobUrl?: string | null; tutorId?: string | null; mode?: string | null; language?: string | null; conversationId?: number | null } = {}, signal?: AbortSignal) =>
-    req<TutorMessage & { reply?: string; tutor_id?: string; mode?: string; language?: string; conversation_id?: number | null; conversation?: TutorConversation }>(`/api/students/${studentId}/tutor`, { method: 'POST', body: JSON.stringify({ message, skill_id: opts.skillId ?? null, page: opts.page ?? 'dashboard', competency: opts.competency ?? null, job_title: opts.jobTitle ?? null, job_url: opts.jobUrl ?? null, tutor_id: opts.tutorId ?? null, mode: opts.mode ?? null, language: opts.language ?? null, conversation_id: opts.conversationId ?? null }), signal }),
+  tutorSendAbortable: (studentId: number, message: string, opts: { skillId?: number | null; page?: string; competency?: string | null; jobTitle?: string | null; jobUrl?: string | null; tutorId?: string | null; mode?: string | null; language?: string | null; conversationId?: number | null; spoken?: boolean } = {}, signal?: AbortSignal) =>
+    req<TutorMessage & { reply?: string; tutor_id?: string; mode?: string; language?: string; conversation_id?: number | null; conversation?: TutorConversation }>(`/api/students/${studentId}/tutor`, { method: 'POST', body: JSON.stringify({ message, skill_id: opts.skillId ?? null, page: opts.page ?? 'dashboard', competency: opts.competency ?? null, job_title: opts.jobTitle ?? null, job_url: opts.jobUrl ?? null, tutor_id: opts.tutorId ?? null, mode: opts.mode ?? null, language: opts.language ?? null, conversation_id: opts.conversationId ?? null, spoken: opts.spoken === true }), signal }),
   setTutorPreference: (studentId: number, patch: { tutor_id?: string; mode?: string; language?: string } = {}) =>
     req<{ tutor_id: string; mode: string; language: string }>(`/api/students/${studentId}/tutor/preference`, { method: 'PUT', body: JSON.stringify(patch) }),
   copilotConfig: (studentId: number) =>

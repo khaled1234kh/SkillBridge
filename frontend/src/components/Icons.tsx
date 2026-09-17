@@ -355,6 +355,11 @@ export const IconKeyboard = (p: IconProps) => (
     <path d="M7 11h.01M11 11h.01M15 11h.01M17 11h.01M7 14h10" />
   </svg>
 )
+export const IconMenu = (p: IconProps) => (
+  <svg {...base(p.size, p.className, p.style)} strokeWidth={2}>
+    <path d="M4 6h16M4 12h16M4 18h16" />
+  </svg>
+)
 export const IconXClose = (p: IconProps) => (
   <svg {...base(p.size, p.className, p.style)}>
     <path d="M6 6l12 12M18 6L6 18" />

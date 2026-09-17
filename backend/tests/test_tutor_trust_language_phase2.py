@@ -313,6 +313,9 @@ def test_officially_verified_skill_is_stated_confidently(
 
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"tutor_id": "nova", "mode": "chat", "language": "en"})
+    # Open the thread first: a fresh conversation gates context away, so the
+    # verified-skills record is only visible from the second message on.
+    _chat(client, student_id, h, "Explain Docker volumes.")
     reply = _chat(client, student_id, h, "I already verified Docker.")["reply"]
 
     assert "SkillBridge already marks Docker as officially verified" in reply
@@ -324,6 +327,9 @@ def test_verified_skills_question_lists_only_official_records(
         client, student_id, auth_headers):
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"tutor_id": "nova", "mode": "chat", "language": "en"})
+    # Open the thread first: a fresh conversation gates context away (the seed
+    # marks Python and SQL as officially verified for this student).
+    _chat(client, student_id, h, "Explain Docker volumes.")
     reply = _chat(
         client, student_id, h,
         "What skills have I actually verified according to SkillBridge?",

@@ -544,7 +544,7 @@ def api_demo_mode():
 
 @app.get("/api/debug/tutor-system")
 def api_debug_tutor_system(message: str = "", tutor_id: str = "nova",
-                           mode: str = "chat", language: str = ""):
+                           mode: str = "chat", language: str = "", spoken: bool = False):
     """Return the EXACT system prompt that would be sent to the provider for a
     tutor turn, so the prompt actually seen by the model can be verified.
 
@@ -562,6 +562,7 @@ def api_debug_tutor_system(message: str = "", tutor_id: str = "nova",
     intent = genai._classify_tutor_turn(message, mode=mode)
     system = genai._tutor_system(
         lang, intent, mode or "chat", tutor_id or "nova", message, persona, None,
+        spoken=spoken,
     )
     return {
         "ok": True,
@@ -569,6 +570,7 @@ def api_debug_tutor_system(message: str = "", tutor_id: str = "nova",
         "tutor_id": tutor_id,
         "resolved_language": resolved,
         "intent": intent,
+        "spoken": spoken,
         "system": system,
         "language_lock": genai._language_lock(lang),
         "mirror_rule": genai._MIRROR_LANGUAGE_RULE,
@@ -1110,6 +1112,55 @@ def upload_cv(student_id: int, file: UploadFile = File(...), request: Request = 
             "warning": warning, "skills_kept": not extracted}
 
 
+# ------------------------------------------------------------------ artifacts
+
+@app.post("/api/students/{student_id}/artifacts")
+def api_student_artifacts(student_id: int, request: Request, body: dict):
+    """Generate a career artifact (resume / cover letter / 6-month career plan)
+    from TRUSTED SkillBridge state only: the student's verified skills + target
+    role + identity. The job is advisory output — it can never create, override,
+    or imply verified skills. Runs on the career-artifact model (ARTIFACT_MODEL,
+    NVIDIA NIM, same key as the interactive model); when that model is unset,
+    down, or slow, a DETERMINISTIC draft built from the same trusted facts is
+    returned instead — generation never fails and never invents claims."""
+    user = _current_user(request)
+    _require_roles(user, "Student")
+    _own_student(user, student_id)
+    kind = str(body.get("kind") or "").strip().lower()
+    if kind not in genai.ARTIFACT_KINDS:
+        raise HTTPException(status_code=400, detail=(
+            f"Unknown artifact kind (allowed: {', '.join(genai.ARTIFACT_KINDS)})"))
+    language = str(body.get("language") or "en").strip().lower()
+    if language not in ("en", "ar"):
+        raise HTTPException(status_code=400,
+                            detail="Unknown artifact language (allowed: en, ar)")
+    student = models.get_student(student_id)
+    role = student.get("target_role") or {}
+    if isinstance(role, dict):
+        target_role = str(role.get("title") or role.get("name") or "").strip()
+    else:
+        target_role = str(role or "").strip()
+    verified = [v for v in (student.get("verified_skills") or []) if isinstance(v, dict)]
+    self_reported = [s for s in (student.get("self_reported_skills") or []) if isinstance(s, dict)]
+    name = str(user.get("display_name") or user.get("name") or "").strip()
+    text, provider = genai.generate_career_artifact(
+        kind,
+        display_name=name,
+        target_role=target_role,
+        verified_skills=verified,
+        self_reported_skills=self_reported,
+        university=str(student.get("university") or "").strip(),
+        education_level=str(student.get("education_level") or "").strip(),
+        language=language,
+    )
+    return {
+        "kind": kind,
+        "language": language,
+        "artifact": text,
+        "genai_provider": provider,
+    }
+
+
 # ------------------------------------------------------------------ matching
 
 @app.get("/api/students/{student_id}/analysis")
@@ -1489,6 +1540,7 @@ def api_tutor_chat(student_id: int, request: Request, body: dict):
             language=language,
             personality=personality,
             conversation_memory=memory_block,
+            spoken=bool(body.get("spoken")),
         )
     msg = models.add_tutor_message(student_id, tutor_id, skill_id, "assistant", reply,
                                    conversation_id=conversation_id)
@@ -1905,6 +1957,82 @@ def api_tutor_tts(student_id: int, request: Request, body: dict):
         raise HTTPException(status_code=503, detail=str(exc))
     return StreamingResponse(iter([audio]), media_type="audio/mpeg",
                              headers={"Cache-Control": "max-age=3600"})
+
+
+@app.post("/api/students/{student_id}/tutor/stt")
+def api_tutor_stt(student_id: int, request: Request, body: dict):
+    """Server-side speech-to-text fallback for browsers where the Web Speech API
+    is unavailable (e.g. Brave blocking Google's speech servers).
+
+    Accepts base64-encoded WAV audio (16-bit PCM, mono, 16 kHz) produced by the
+    frontend's AudioContext recorder, returns the transcribed text. Uses Google's
+    free speech recognition via the SpeechRecognition library (no API key needed
+    for short utterances; rate-limited).
+    """
+    import base64
+    import io
+    try:
+        import speech_recognition as sr
+    except ImportError:
+        raise HTTPException(status_code=501, detail="STT not available on this server")
+
+    user = _current_user(request)
+    _own_student(user, student_id)
+    audio_b64 = body.get("audio")
+    if not audio_b64 or not isinstance(audio_b64, str):
+        raise HTTPException(status_code=400, detail="Missing base64 audio")
+    lang = body.get("language", "en")
+    google_lang = "ar-EG" if lang == "ar" else "en-US"
+    try:
+        wav_bytes = base64.b64decode(audio_b64)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid base64 audio")
+    # sr.AudioData expects RAW PCM (no container). Strip a RIFF/WAVE header if
+    # the frontend sent a .wav container.
+    if wav_bytes[0:4] == b"RIFF" and wav_bytes[8:12] == b"WAVE":
+        import struct
+        try:
+            sample_rate, sample_width = _wav_format(wav_bytes)
+        except Exception:
+            raise HTTPException(status_code=400, detail="Unsupported WAV container")
+        wav_bytes = wav_bytes[44:]
+    else:
+        sample_rate, sample_width = 16000, 2
+    if not wav_bytes:
+        raise HTTPException(status_code=400, detail="Empty audio")
+    try:
+        audio_data = sr.AudioData(wav_bytes, sample_rate, sample_width)
+        recognizer = sr.Recognizer()
+        text = recognizer.recognize_google(audio_data, language=google_lang)
+    except sr.UnknownValueError:
+        text = ""
+    except sr.RequestError as exc:
+        raise HTTPException(status_code=503, detail=f"STT service unavailable: {exc}")
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"STT failed: {exc}")
+    return {"text": text}
+
+
+def _wav_format(wav_bytes: bytes):
+    """Return (sample_rate, sample_width) from a 16/24/32-bit PCM RIFF header."""
+    import struct
+
+    def _find(data, chunk_id, start=12):
+        pos = start
+        while pos + 8 <= len(data):
+            cid = data[pos:pos + 4]
+            size = struct.unpack("<I", data[pos + 4:pos + 8])[0]
+            if cid == chunk_id:
+                return pos + 8, size
+            pos += 8 + size + (size & 1)
+        raise ValueError(f"chunk {chunk_id} not found")
+
+    fmt_pos, _ = _find(wav_bytes, b"fmt ")
+    sample_rate = struct.unpack("<I", wav_bytes[fmt_pos + 4:fmt_pos + 8])[0]
+    bits = struct.unpack("<H", wav_bytes[fmt_pos + 14:fmt_pos + 16])[0]
+    if bits not in (16, 24, 32):
+        raise ValueError(f"unsupported bits {bits}")
+    return sample_rate, bits // 8
 
 
 # ------------------------------------------------------------------ assessments

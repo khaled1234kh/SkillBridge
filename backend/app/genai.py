@@ -64,6 +64,33 @@ NIM_TIMEOUT_SECONDS = _bounded_nim_timeout(os.environ.get("NIM_TIMEOUT_SECONDS",
 # keep reasoning (and rely on the _strip_reasoning safety net instead).
 NIM_DISABLE_THINKING = os.environ.get("NIM_DISABLE_THINKING", "1").strip().lower() != "0"
 
+# Career-artifact / long-horizon generation model (env-optional). Served on the
+# same NVIDIA NIM endpoint + NVIDIA_API_KEY as NIM_MODEL — only the model string
+# differs. Used for latency-tolerant, low-frequency quality work (career
+# artifacts, memory enrichment). Interactive paths (chart/chat/live) NEVER use
+# it; they stay on ``NIM_MODEL``. Empty/blank -> disabled (deterministic-only).
+ARTIFACT_MODEL = (os.environ.get("ARTIFACT_MODEL") or "").strip() or None
+
+# Hard bounds mirroring NIM_TIMEOUT_SECONDS so an artifact draw can never hang a
+# request indefinitely. GLM-class reasoning models are slow by nature, so the
+# artifact budget is larger than the interactive one — but always finite.
+_ARTIFACT_TIMEOUT_MAX_S = 300
+_ARTIFACT_TIMEOUT_MIN_S = 15
+_ARTIFACT_TIMEOUT_DEFAULT_S = 150
+
+
+def _bounded_artifact_timeout(value):
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return _ARTIFACT_TIMEOUT_DEFAULT_S
+    return min(_ARTIFACT_TIMEOUT_MAX_S, max(_ARTIFACT_TIMEOUT_MIN_S, parsed))
+
+
+ARTIFACT_TIMEOUT_SECONDS = _bounded_artifact_timeout(
+    os.environ.get("ARTIFACT_TIMEOUT_SECONDS", str(_ARTIFACT_TIMEOUT_DEFAULT_S))
+)
+
 LEVELS = ("Beginner", "Intermediate", "Advanced")
 
 _TLS_VERIFY_CONTEXT = None
@@ -91,6 +118,7 @@ _LAST_PROVIDER = ""
 _LAST_ATTEMPT = {
     "attempted": False,
     "provider": None,
+    "model": None,
     "success": False,
     "error_class": None,
     "http_status": None,
@@ -147,6 +175,7 @@ def provider_status():
         "active_provider": _LAST_PROVIDER or preferred,
         "last_active_provider": _LAST_PROVIDER or None,
         "last_attempted_provider": _LAST_ATTEMPT["provider"] if attempted else None,
+        "last_attempt_model": _LAST_ATTEMPT["model"] if attempted else None,
         "last_success": _LAST_ATTEMPT["success"] if attempted else None,
         "last_error_type": _LAST_ATTEMPT["error_class"] if attempted else None,
         "last_http_status": _LAST_ATTEMPT["http_status"],
@@ -224,8 +253,17 @@ def _chat_message_content(data):
 
 _nim_circuit = {"failures": 0, "open_until": 0.0}
 
+# Bounded single-retry policy for a dropped/overloaded NIM draw.
+# One retry ONLY (never a loop); fires ONLY on an empty stream (HTTP 200 that
+# produced no visible content) or a 502/503/504; NEVER on 200-with-content or
+# on any 4xx (incl. 429) / 500 / connection error / timeout. Fixed 500ms
+# backoff. Skipped when less than half of the path's timeout budget remains,
+# so the interactive guard / artifact bound is never blown.
+_NIM_RETRY_BACKOFF_S = 0.5
+_NIM_RETRYABLE_STATUSES = frozenset((502, 503, 504))
 
-def _call_nim(system, user, retries=1, max_tokens=1024, timeout=None):
+
+def _call_nim(system, user, retries=2, max_tokens=1024, timeout=None, model=None, thinking=None):
     import httpx
 
     now = time.time()
@@ -235,7 +273,7 @@ def _call_nim(system, user, retries=1, max_tokens=1024, timeout=None):
     timeout_s = timeout or NIM_TIMEOUT_SECONDS
     url = f"{NIM_BASE_URL.rstrip('/')}/chat/completions"
     payload = {
-        "model": NIM_MODEL,
+        "model": (model or NIM_MODEL),
         "messages": [
             {"role": "system", "content": system},
             {"role": "user", "content": user},
@@ -245,54 +283,361 @@ def _call_nim(system, user, retries=1, max_tokens=1024, timeout=None):
         "top_p": 0.95,
     }
     headers = {"Authorization": f"Bearer {NIM_KEY}"}
-    if NIM_DISABLE_THINKING:
+    # The NIM-specific reasoning toggle is only valid for the nemotron family
+    # (the configured main model). A model override (LIVE fast model or the
+    # ARTIFACT_MODEL) is an instruct-class model that must NOT receive
+    # model-specific kwargs it may reject with a 400 — except when the caller
+    # explicitly opts into a thinking toggle (artifact paths pass
+    # thinking=False to keep GLM-class reasoning latencies bounded).
+    if thinking is not None:
+        payload["chat_template_kwargs"] = {"enable_thinking": bool(thinking)}
+    elif NIM_DISABLE_THINKING and model is None:
         payload["chat_template_kwargs"] = {"enable_thinking": False}
     last_exc = None
     last_status = None
     last_timeout = False
+    started = time.time()
 
-    for attempt in range(retries):
+    # At most TWO provider attempts total (one retry). `retries` keeps its
+    # historical "maximum attempts" meaning (0/1 => 1 attempt; 2 => up to 2),
+    # but the count is hard-capped at 2 so this can never loop.
+    attempts = min(2, max(1, retries))
+    for attempt in range(attempts):
+        elapsed = time.time() - started
+        remaining = timeout_s - elapsed
+        # A retry draw is never entered once the budget gate has closed (a
+        # separate attempt must not blow the path's bound by a second full
+        # draw after a slow first one consumed most of the budget).
+        if attempt > 0 and remaining < (timeout_s / 2):
+            break
+        budget_ok = remaining >= (timeout_s / 2)
+        # The retry must not blow the path's bound: only fire when more than
+        # half of the original budget is still left, and cap the retry's own
+        # request timeout to the remaining budget.
+        can_retry = attempt + 1 < attempts and budget_ok
+        req_timeout = remaining if (attempt > 0 and remaining > 0) else timeout_s
+        retryable = False
         try:
             resp = httpx.post(url, headers=headers, json=payload,
-                              verify=_tls_verify_context(), timeout=timeout_s)
-            if resp.status_code in (429, 500, 502, 503, 504):
-                last_exc = RuntimeError(f"NIM HTTP {resp.status_code}")
-                last_status = resp.status_code
-                time.sleep(min(1, 1.5 ** attempt))
-                continue
-            resp.raise_for_status()
-            _nim_circuit["failures"] = 0
-            return _chat_message_content(resp.json())
+                              verify=_tls_verify_context(), timeout=req_timeout)
+            status = resp.status_code
+            if status in _NIM_RETRYABLE_STATUSES:
+                last_exc = RuntimeError(f"NIM HTTP {status}")
+                last_status = status
+                retryable = True
+            else:
+                resp.raise_for_status()
+                try:
+                    body = resp.json()
+                except Exception:
+                    body = None
+                content = _chat_message_content(body) if body is not None else ""
+                if not content:
+                    # Empty stream: the draw produced no visible content — the
+                    # measured ~1/3 rapid-fire drop. Retried once, then fails.
+                    last_exc = RuntimeError("NIM empty response")
+                    last_status = status
+                    retryable = True
+                else:
+                    _nim_circuit["failures"] = 0
+                    return content
         except httpx.HTTPStatusError as exc:
             last_exc = exc
             last_status = exc.response.status_code if exc.response is not None else None
-            if exc.response is not None and exc.response.status_code in (429, 500, 502, 503, 504):
-                time.sleep(min(1, 1.5 ** attempt))
-                continue
-            raise
+            if last_status in _NIM_RETRYABLE_STATUSES:
+                retryable = True
+            else:
+                # 4xx (incl. 429) / 500 / anything else: never retried.
+                raise
         except Exception as exc:
+            # Connection errors / timeouts are NOT part of the retry policy.
             last_exc = exc
             last_timeout = last_timeout or _exc_is_timeout(exc)
-            time.sleep(min(1, 1.5 ** attempt))
+
+        if retryable and can_retry:
+            time.sleep(_NIM_RETRY_BACKOFF_S)
+            continue
+        break
 
     _nim_circuit["failures"] += 1
     if _nim_circuit["failures"] >= 3:
         _nim_circuit["open_until"] = now + 60
-    err = RuntimeError(f"NIM request failed after {retries} attempts: {last_exc}")
+    err = RuntimeError(f"NIM request failed after {attempts} attempt(s): {last_exc}")
     err.status_code = last_status
     err.timeout = last_timeout
     raise err
 
 
-def _generate(system, user, max_tokens=None, timeout=None):
+def artifact_model_enabled():
+    """True when a separate career-artifact model is configured AND a provider
+    key exists. Interactive paths ignore this entirely — they never route here."""
+    return bool(ARTIFACT_MODEL and NIM_KEY)
+
+
+def _call_artifact(system, user, max_tokens=1536, retries=2):
+    """Call the career-artifact model (ARTIFACT_MODEL) on the SAME NIM endpoint
+    and key as the interactive model. Thinking is disabled (``enable_thinking:
+    False``) so GLM-class reasoning latencies stay bounded. ``retries=2`` arms
+    the bounded single-retry on dropped/overloaded draws (empty stream, 502/
+    503/504) — never a loop, never after 4xx/200-with-content. Raises on any
+    provider failure — callers resolve to their deterministic drafts."""
+    if not artifact_model_enabled():
+        raise RuntimeError("artifact model not configured")
+    return _call_nim(
+        system,
+        user,
+        model=ARTIFACT_MODEL,
+        thinking=False,
+        retries=retries,
+        max_tokens=max_tokens,
+        timeout=ARTIFACT_TIMEOUT_SECONDS,
+    )
+
+
+ARTIFACT_KINDS = ("resume", "cover_letter", "career_plan")
+
+_ARTIFACT_LABEL = {
+    "resume": ("a one-page resume", "سيرة ذاتية من صفحة واحدة"),
+    "cover_letter": ("a short professional cover letter (about three paragraphs)",
+                     "خطاب تقديم احترافي قصير من حوالي 3 فقرات"),
+    "career_plan": ("a personalized 6-month career plan",
+                    "خطة مهنية شخصية لـ 6 شهور"),
+}
+
+
+def _artifact_profile_block(*, display_name, target_role, verified,
+                            self_reported, university, education_level):
+    """Trusted facts for the artifact prompt — only real SkillBridge state, the
+    same ground truth the tutor context uses. Never invents anything."""
+    lines = [f"Name: {display_name or 'SkillBridge learner'}"]
+    role = str(target_role or "").strip()
+    lines.append(f"Target role: {role or 'not set yet'}")
+    if verified:
+        lines.append("VERIFIED skills (passed SkillBridge assessments):")
+        for v in verified:
+            level = v.get("level") or "Verified"
+            lines.append(f"- {v['name']} ({level})")
+    else:
+        lines.append("VERIFIED skills: none yet")
+    if self_reported:
+        lines.append("Self-reported skills (not yet verified):")
+        for s in self_reported:
+            lines.append(f"- {s['name']}")
+    edu = " - ".join(filter(None, [university or "", education_level or ""]))
+    if edu:
+        lines.append(f"Education: {edu}")
+    return "\n".join(lines)
+
+
+def _artifact_prompt(kind, *, display_name, target_role, verified,
+                     self_reported, university, education_level, language):
+    label = _ARTIFACT_LABEL[kind][0 if language == "en" else 1]
+    lang_line = ("Write the ENTIRE document in clear professional English."
+                 if language == "en" else
+                 "اكتب الوثيقة كاملة بالعربية بأسلوب واضح وحرفي بسيط.")
+    system = (
+        "You are SkillBridge's career advisor. Generate {label} for a student "
+        "using ONLY the trusted profile facts below. Never invent skills, "
+        "grades, employers, experience, or achievements that are not listed. "
+        "Do not add a preamble or closing chit-chat — output the document "
+        "only. {lang_line}"
+    ).format(label=label, lang_line=lang_line)
+    user = (
+        "Trusted SkillBridge profile:\n{block}\n\n"
+        "Produce {label}, tailored to the student's target role and current "
+        "verified skills."
+    ).format(block=_artifact_profile_block(
+        display_name=display_name, target_role=target_role, verified=verified,
+        self_reported=self_reported, university=university,
+        education_level=education_level,
+    ), label=label)
+    return system, user
+
+
+def _artifact_fallback_draft(kind, *, display_name, target_role, verified,
+                             self_reported, university, education_level, language):
+    """Deterministic draft from trusted state. Advisory only — never the
+    Verified-Skill authority, never invented claims."""
+    name = str(display_name or "").strip() or (
+        "متعلم على SkillBridge" if language == "ar" else "SkillBridge Learner")
+    role = str(target_role or "").strip() or (
+        "الوظيفة المستهدفة" if language == "ar" else "target role")
+    verified_names = [f"- {v['name']} ({v.get('level') or 'Verified'})"
+                      for v in (verified or [])]
+    reported_names = [f"- {s['name']}" for s in (self_reported or [])]
+    if language == "ar":
+        edu = " - ".join(filter(None, [university or "", education_level or ""]))
+        base = [
+            f"{name} — {role}",
+        ]
+        if edu:
+            base.append(f"التعليم: {edu}")
+    else:
+        edu = " - ".join(filter(None, [university or "", education_level or ""]))
+        base = [name, f"{role}"]
+        if edu:
+            base.append(f"Education: {edu}")
+
+    if kind == "resume":
+        if language == "ar":
+            body = (
+                base
+                + ["",
+                   "نبذة",
+                   f"طالب على SkillBridge يستهدف {role} ويبني مهاراته بشكل موثّق.",
+                   "",
+                   "المهارات الموثّقة (امتحانات SkillBridge)",
+                   *verified_names,
+                   "مهارات غير موثّقة بعد",
+                   *(reported_names or ["- لا توجد"]),
+                   "",
+                   "ملحوظة: مسودة مبنية على بروفايلك في SkillBridge — راجعها قبل مشاركتها."]
+            )
+        else:
+            body = (
+                base
+                + ["",
+                   "PROFILE",
+                   f"A SkillBridge student targeting the {role} role, building "
+                   "verifiable skills.",
+                   "",
+                   "VERIFIED SKILLS",
+                   *(verified_names or ["- none yet"]),
+                   "SELF-REPORTED SKILLS",
+                   *(reported_names or ["- none"]),
+                   "",
+                   "Note: draft generated from your SkillBridge profile — review before sharing."]
+            )
+    elif kind == "cover_letter":
+        if language == "ar":
+            body = (
+                base
+                + ["",
+                   "عزيزي فريق التوظيف،",
+                   f"أنا {name}، طالب على SkillBridge يستهدف {role}.",
+                   "أهم مهاراتي الموثّقة:" + (" " + "، ".join(v["name"] for v in (verified or [])) if verified else " لا توجد مهارات موثّقة بعد."),
+                   "أطمح أن أضيف قيمة لفريقكم وأنا جاهز لتوضيح مهاراتي خلال مقابلة.",
+                   "مع خالص التحية،",
+                   name,
+                   "(مسودة من بروفايلك — راجعها قبل الإرسال)"]
+            )
+        else:
+            body = (
+                base
+                + ["",
+                   "Dear Hiring Team,",
+                   f"I am {name}, a SkillBridge student targeting the {role} role.",
+                   "My key verified skills are: " + (", ".join(v["name"] for v in (verified or []) if v.get("name")) if verified else "no verified skills yet, and I am working to earn them."),
+                   "I look forward to discussing how I can contribute to your team in an interview.",
+                   "Sincerely,",
+                   name,
+                   "(Draft from your profile — review before sending)"]
+            )
+    else:  # career_plan
+        next_lines = (
+            [f"- {v['name']} — maintain and apply" for v in (verified or [])]
+            if verified else
+            ["- Pick one target skill on Skills & Roles and start learning it."]
+        )
+        if language == "ar":
+            body = (
+                ["خطة 6 شهور لـ " + name]
+                + base
+                + ["",
+                   "الشهر 1-2: ركّز على المهارات المطلوبة لـ " + role + " وقم بتحديث ملفك.",
+                   "الشهر 3-4: طبّق عبر مشروع واحد حقيقي يُظهر مهاراتك الموثّقة.",
+                   "الشهر 5-6: جهّز السيرة الذاتية وتقدّم لفرص محددة تستهدف " + role + ".",
+                   "",
+                   "الخطوات الحالية:",
+                   *next_lines,
+                   "",
+                   "(مسودة — راجعها وحدّثها مع مرشدك)"]
+            )
+        else:
+            body = (
+                [f"6-month plan for {name}"]
+                + base
+                + ["",
+                   "Month 1-2: focus on the skills the " + role + " role requires and update your profile.",
+                   "Month 3-4: apply the work through one real project that shows your verified skills.",
+                   "Month 5-6: finalize your resume and apply to roles that genuinely target " + role + ".",
+                   "",
+                   "Current next steps:",
+                   *next_lines,
+                   "",
+                   "(Draft — review and refine with your mentor)"]
+            )
+    return "\n".join(body)
+
+
+def generate_career_artifact(kind, *, display_name="", target_role="",
+                             verified_skills=None, self_reported_skills=None,
+                             university="", education_level="", language="en"):
+    """Generate a career artifact (resume / cover letter / career plan) from
+    TRUSTED SkillBridge state only (verified skills + target role + identity).
+
+    The artifact model (``ARTIFACT_MODEL``) is production-priority but optional:
+    when it is not configured, unavailable, or the draw fails/times out, the
+    deterministic draft built from the same trusted facts is returned instead
+    (provider 'deterministic-fallback') — never an error, never an invented
+    claim. Returns ``(text, provider)``.
+    """
+    kind = str(kind or "").strip().lower()
+    if kind not in ARTIFACT_KINDS:
+        raise ValueError(f"Unsupported artifact kind: {kind!r}")
+    language = "ar" if _normalized_lang(language) == "ar" else "en"
+    verified = [v for v in (verified_skills or []) if isinstance(v, dict)]
+    verified_names = {str(v.get("name") or "").strip() for v in verified}
+    self_reported = [
+        s for s in (self_reported_skills or [])
+        if isinstance(s, dict) and str(s.get("name") or "").strip()
+        and str(s.get("name") or "").strip() not in verified_names
+    ]
+    fallback = _artifact_fallback_draft(
+        kind, display_name=display_name, target_role=target_role,
+        verified=verified, self_reported=self_reported,
+        university=university, education_level=education_level, language=language,
+    )
+    if not artifact_model_enabled():
+        return fallback, "deterministic-fallback"
+    system, user = _artifact_prompt(
+        kind, display_name=display_name, target_role=target_role,
+        verified=verified, self_reported=self_reported,
+        university=university, education_level=education_level, language=language,
+    )
+    try:
+        text = _call_artifact(system, user)
+    except Exception:
+        return fallback, "deterministic-fallback"
+    text = str(text or "").strip()
+    if len(text) < 40:
+        return fallback, "deterministic-fallback"
+    return text, "real"
+
+
+def _generate(system, user, max_tokens=None, timeout=None, model=None, retries=None):
     """Run the real provider chain in priority order; record secret-free
     diagnostics for every attempt (see ``provider_status``). All provider
     exceptions are caught and the next configured provider is tried; when every
     configured provider fails, RuntimeError is raised and ``complete`` resolves
-    to the deterministic fallback."""
+    to the deterministic fallback.
+
+    ``model`` is the LIVE-only fast-model override (see ``LIVE_NIM_MODEL``): it
+    is only used for the nvidia provider, and only for the turn that requested
+    it. If the fast model call fails, exactly one fallback attempt uses the
+    configured ``NIM_MODEL`` for that same turn — a provider failure never
+    silently downgrades or drops the answer.
+
+    ``retries`` overrides ``_call_nim``'s default retry count. Live/spoken
+    turns pass ``retries=0`` so a throttled provider is bounded to a single
+    timeout-constrained attempt per draw instead of doubling the latency
+    budget (2 attempts x 30s) and blowing past the frontend reply guard.
+    Interactive/chat and artifact draws use the default (2 = one bounded
+    retry on dropped/overloaded draws only, 500ms backoff, budget-gated).
+    """
     global _LAST_PROVIDER
     _LAST_ATTEMPT.update({
-        "attempted": False, "provider": None, "success": False,
+        "attempted": False, "provider": None, "model": None, "success": False,
         "error_class": None, "http_status": None, "timeout": False,
         "elapsed_ms": None,
     })
@@ -302,8 +647,19 @@ def _generate(system, user, max_tokens=None, timeout=None):
     if ANTHROPIC_KEY:
         candidates.append(("anthropic", lambda s, u: _call_anthropic(s, u)))
     if NIM_KEY:
-        candidates.append(("nvidia", lambda s, u: _call_nim(
-            s, u, max_tokens=max_tokens or 1024, timeout=timeout or NIM_TIMEOUT_SECONDS)))
+        def _nvidia_call(s, u):
+            kwargs = dict(max_tokens=max_tokens or 1024,
+                          timeout=timeout or NIM_TIMEOUT_SECONDS)
+            if retries is not None:
+                kwargs["retries"] = retries
+            if model:
+                try:
+                    return _call_nim(s, u, model=model, **kwargs)
+                except Exception:
+                    # LIVE fast-model failure: same turn, main configured model.
+                    return _call_nim(s, u, **kwargs)
+            return _call_nim(s, u, **kwargs)
+        candidates.append(("nvidia", _nvidia_call))
     for name, call in candidates:
         started = time.time()
         _LAST_ATTEMPT.update({"attempted": True, "provider": name})
@@ -312,7 +668,7 @@ def _generate(system, user, max_tokens=None, timeout=None):
             _LAST_PROVIDER = name
             _LAST_ATTEMPT.update({
                 "success": True, "error_class": None, "http_status": None,
-                "timeout": False,
+                "timeout": False, "model": model if name == "nvidia" else None,
                 "elapsed_ms": int((time.time() - started) * 1000),
             })
             return reply
@@ -322,6 +678,7 @@ def _generate(system, user, max_tokens=None, timeout=None):
                 "error_class": type(exc).__name__,
                 "http_status": _exc_http_status(exc),
                 "timeout": _exc_is_timeout(exc) or bool(getattr(exc, "timeout", False)),
+                "model": model if name == "nvidia" else None,
                 "elapsed_ms": int((time.time() - started) * 1000),
             })
             continue
@@ -329,9 +686,9 @@ def _generate(system, user, max_tokens=None, timeout=None):
     raise RuntimeError("No GenAI provider available")
 
 
-def complete(system, user, fallback=None, max_tokens=None, timeout=None):
+def complete(system, user, fallback=None, max_tokens=None, timeout=None, model=None, retries=None):
     try:
-        return _generate(system, user, max_tokens=max_tokens, timeout=timeout)
+        return _generate(system, user, max_tokens=max_tokens, timeout=timeout, model=model, retries=retries)
     except Exception as exc:
         if fallback is not None:
             return fallback
@@ -498,6 +855,24 @@ def _model_candidate_allowed(name, explicit_keys):
     return True
 
 
+# CV extraction is a best-effort enrichment step: a throttled provider must
+# never make the upload block for the full NIM budget. Bound the provider call
+# to one short attempt and truncate the inlined CV text so huge resumes can't
+# blow up prompt length/latency; the deterministic extractor is always run and
+# wins when the provider is slow or down.
+# The provider call is bounded to ONE short attempt (retries=0) so a throttled
+# NIM can never hold the upload for the full NIM budget; `complete` returns the
+# deterministic fallback on any failure. The deterministic fallback scan itself
+# is ~18-50us per byte (per-term search over the window), so its window is also
+# capped — real CV text is ~5-20KB, so 40k covers virtually every upload and
+# bounds the scan to roughly 1-2s. Worst end-to-end (provider + scan) stays
+# near 8s; a healthy provider keeps the model extraction and lands in ~2-6s.
+_CV_TIMEOUT_SECONDS = 7
+_CV_RETRIES = 0
+_CV_TEXT_LIMIT = 60_000
+_CV_DETERMINISTIC_LIMIT = 40_000
+
+
 def extract_skills_from_cv(cv_text):
     system = (
         "You are a strict skill-extraction engine. Given a candidate's CV or transcript text, "
@@ -529,18 +904,19 @@ def extract_skills_from_cv(cv_text):
 
     def fallback():
         found = {}
+        scan = (cv_text or "")[:_CV_DETERMINISTIC_LIMIT]
         # Layer A — trusted known terms anywhere in the text (whole-phrase
         # matching; metadata, not an allow-list).
-        for hit in skill_registry.match_known_terms(cv_text or ""):
+        for hit in skill_registry.match_known_terms(scan):
             key = hit["name"].lower()
             if key not in found:
                 found[key] = {"name": hit["name"], "category": hit["category"],
-                              "level": _infer_level(cv_text, hit["name"]),
+                              "level": _infer_level(scan, hit["name"]),
                               "evidence": hit["evidence"]}
         # Layer B — explicit skills sections: unknown-but-grounded skills survive
         # deterministically; nothing is inferred from prose or job titles. An
         # explicit "(Advanced)" annotation wins over sentence-level inference.
-        for entry in skill_registry.skill_section_entries(cv_text or ""):
+        for entry in skill_registry.skill_section_entries(scan):
             entry_name, lvl_hint = _entry_level(entry)
             canon, cat = _normalise_skill(entry_name)
             if not canon:
@@ -549,7 +925,7 @@ def extract_skills_from_cv(cv_text):
             existing = found.get(key)
             if existing is None:
                 found[key] = {"name": canon, "category": cat,
-                              "level": lvl_hint or _infer_level(cv_text, canon),
+                              "level": lvl_hint or _infer_level(scan, canon),
                               "evidence": entry.strip()[:300]}
             elif lvl_hint:
                 existing["level"] = lvl_hint
@@ -563,8 +939,11 @@ def extract_skills_from_cv(cv_text):
         "explicitly claimed in the candidate's text. Known canonical names are "
         "preferred only when the text clearly refers to that same skill, but the "
         "supplied vocabulary is NOT exhaustive — unknown skills must be preserved "
-        "exactly as written. Do not invent anything.\n\nCV text:\n\n" + (cv_text or ""),
+        "exactly as written. Do not invent anything.\n\nCV text:\n\n"
+        + (cv_text or "")[:_CV_TEXT_LIMIT],
         fallback=json.dumps(fallback_val),
+        timeout=_CV_TIMEOUT_SECONDS,
+        retries=_CV_RETRIES,
     )
     parsed = _extract_json(raw)
     if not isinstance(parsed, list) or not parsed:
@@ -1401,6 +1780,93 @@ _MIRROR_LANGUAGE_RULE = (
     "Do not explain. Do not translate."
 )
 
+# Live-Mode voice surface only (frontend sends spoken=true on the Live voice
+# request). This is a SURFACE directive, not a persona change: normal chat turns
+# never carry it. It keeps spoken replies natural — short for simple questions,
+# no markdown scaffolding — without any persona/teaching redesign.
+_SPOKEN_RULE = (
+    "This reply will be read aloud by a text-to-speech voice. Keep it natural "
+    "for speech and concise: answer the requested question directly and first, "
+    "then add at most one short supporting sentence. For a simple question (for "
+    "example \"What's your name?\" or \"What can you help me with?\") reply in "
+    "1-3 short sentences; for an explanation, prefer one focused paragraph over "
+    "a long essay. If the student explicitly asks for a detailed explanation, "
+    "step-by-step teaching, or a long example, a fuller spoken answer is fine, "
+    "but stay focused on exactly what was asked and do not pad it. "
+    "No markdown symbols, headers, bullet lists, or table formatting."
+)
+
+# LIVE-only generation budget. Spoken turns are conversational: a small
+# max_tokens keeps a fast model prompt-to-first-token quick and stops simple
+# questions from sprawling. An explicit length request (deep/step-by-step/long
+# example) keeps the default, fuller budget — answers are never globally
+# truncated, and normal chat never uses these numbers.
+_SPOKEN_MAX_TOKENS = 200
+# LIVE/one spoken attempt must NOT hang a learner on a throttled NIM: the
+# provider here is heavily load-balanced (healthy draws ~2-5s, throttled draws
+# have measured 12-31s+). With retries=0 + skip_provider_fail_retry, a draw
+# that outlives this bound resolves to the deterministic _tutor_fallback (a
+# real, meaningful teaching answer), so a spoken turn never faces a silent
+# multi-second wait. Healthy draws still win through with the model. This is
+# the tuned-for-responsiveness ceiling: release -> reply lands in ~5-6s.
+_SPOKEN_TIMEOUT_SECONDS = 5
+
+
+def _live_fast_model():
+    """Live-only fast NIM model override (``LIVE_NIM_MODEL``), or None.
+
+    Optional configuration for the spoken path only: when set, spoken turns
+    prefer this (verified faster) model while normal chat stays on the
+    configured ``NIM_MODEL``. Unset or blank -> None (default model). The value
+    is intentionally not hardcoded or defaulted to an unverified name here.
+    """
+    name = (os.environ.get("LIVE_NIM_MODEL") or "").strip()
+    return name or None
+
+
+_SPOKEN_IDENTITY_REFERENCE = re.compile(
+    r"what('s| is)\s+your\s+name\s*[?!.؟]?|"
+    r"who\s+are\s+you\s*[?!.؟]?|"
+    r"tell\s+me\s+about\s+yourself\s*[?!.؟]?|"
+    r"what\s+should\s+i\s+calls?\s+you\s*[?!.؟]?|"
+    r"(?:your|ur)\s+name\s*[?]|"
+    r"اسمك\s+ايه|اسمك\s+أيه|اسمك\s+أي|اسمك\s+إيه|"
+    r"مين\s+انت|من\s+أنت|وانت\s+مين|وأنت\s+مين|"
+    r"عرفني\s+بنفسك|قولي\s+اسمك|قول\s+لي\s+اسمك|"
+    r"انت\s+مين|إنت\s+مين",
+    re.IGNORECASE,
+)
+
+# Short, conversational identity line for spoken turns only (never chat). The
+# chat identity answer is the fuller profile paragraph — unchanged.
+_SPOKEN_IDENTITY_EN = {
+    "nova": "I'm Nova, your SkillBridge mentor — the Explainer Tutor.",
+    "axel": "I'm Axel, your SkillBridge mentor — the Practical Coach.",
+    "sage": "I'm Sage, your SkillBridge mentor — the Discussion Mentor.",
+    "vex": "I'm Vex, your SkillBridge mentor — the Examiner.",
+}
+
+_SPOKEN_IDENTITY_AR = {
+    "nova": "أنا Nova، مرشدك في SkillBridge — مدرّب الشرح وتبسيط المفاهيم.",
+    "axel": "أنا Axel، مرشدك في SkillBridge — كوتش التدريب العملي.",
+    "sage": "أنا Sage، مرشدك في SkillBridge — مرشد المناقشة والتفكير.",
+    "vex": "أنا Vex، مرشدك في SkillBridge — المختبر والممتحن.",
+}
+
+
+def _short_spoken_identity(question, persona_id=None, language="en"):
+    """Short `spoken=True` identity answer for an explicit identity question.
+
+    Deterministic and provider-free, so Live's very first "What's your name?"
+    produces audio-ready text instantly (chat keeps the full profile line).
+    """
+    if not _SPOKEN_IDENTITY_REFERENCE.search(str(question or "")):
+        return None
+    pid = (persona_id or "").strip().lower()
+    if _normalized_lang(language) == "ar":
+        return _SPOKEN_IDENTITY_AR.get(pid, _SPOKEN_IDENTITY_AR["nova"])
+    return _SPOKEN_IDENTITY_EN.get(pid, _SPOKEN_IDENTITY_EN["nova"])
+
 def _no_language_narration_rule(persona_name):
     """Never announce/justify/translate the student's language or the response.
 
@@ -1967,7 +2433,7 @@ def _any_provider_configured():
     return bool(NIM_KEY or OPENAI_KEY or ANTHROPIC_KEY)
 
 
-def _complete_visible(system, user, fallback, language, max_tokens=None, timeout=None, persona_id=None):
+def _complete_visible(system, user, fallback, language, max_tokens=None, timeout=None, persona_id=None, model=None, retries=None, skip_provider_fail_retry=False):
     """Provider call wrapper for visible tutor/interview replies.
 
     Providers are instructed to honor the selected language, but the UI contract
@@ -1978,6 +2444,17 @@ def _complete_visible(system, user, fallback, language, max_tokens=None, timeout
     more draw with the SAME prompt. One retry only; if the second draw also
     fails the gate, fall back deterministically. No retry storms, no prompt /
     model / provider-priority changes.
+
+    ``skip_provider_fail_retry`` (Live/spoken only): when the FIRST draw was a
+    provider failure (timeout / circuit / transport — not a gate rejection),
+    spending a second draw on a provider that just failed doubles the latency
+    before reaching the same deterministic fallback. Live passes this flag plus
+    ``retries=0`` so a throttled provider stays well under the frontend reply
+    guard (~30s, one bounded draw). Normal chat keeps the historical behavior.
+
+    ``model`` (LIVE only, see ``_live_fast_model``/``LIVE_NIM_MODEL``) is
+    forwarded to the provider chain for spoken turns; chat uses the configured
+    provider model unchanged.
     """
     fallback = _clean_visible_reply(fallback, persona_id=persona_id, language=language)
     path = "fallback after two rejects"
@@ -1988,7 +2465,8 @@ def _complete_visible(system, user, fallback, language, max_tokens=None, timeout
         t0 = time.time()
         try:
             replied = complete(system, user, fallback=fallback,
-                               max_tokens=max_tokens, timeout=timeout)
+                               max_tokens=max_tokens, timeout=timeout,
+                               model=model, retries=retries)
         except Exception:
             replied = fallback
         dt_ms = int((time.time() - t0) * 1000)
@@ -2016,10 +2494,13 @@ def _complete_visible(system, user, fallback, language, max_tokens=None, timeout
     if first["accepted"]:
         path = "first-attempt accepted"
         final = _strip_mismatched_language_tail(first["cleaned"], language) or first["cleaned"]
-    elif _any_provider_configured():
+    elif _any_provider_configured() and not (skip_provider_fail_retry and first["provider_failed"]):
         # Exactly one re-generation with the SAME prompt. Skipped when no
         # provider is configured at all — deterministic/demo mode would just
-        # re-raise into the fallback, so a retry would be pure waste.
+        # re-raise into the fallback, so a retry would be pure waste. Also
+        # skipped on the Live spoken path when the first draw itself was a
+        # provider failure (timeout/throttle): retrying the same failing
+        # provider doubles the latency before reaching the same fallback.
         second = _attempt()
         if second["accepted"]:
             path = "second-attempt accepted"
@@ -2140,9 +2621,339 @@ _GENERAL_TOPIC_PATTERNS = [
     ("sky blue", re.compile(r"sky\s*blue|السماء\s*زرقا?|ليه\s*السماء\s*زرقا?|ليش\s*السماء|لون\s*السماء\s*(?:أزرق|ازرق)", re.I)),
     ("penetration testing", re.compile(r"penetration\s+test(?:ing)?|pentest|اختبار\s*الاختراق|اختبارات\s*الاختراق", re.I)),
     ("recursion", re.compile(r"\brecursi(?:on|ve|ons?)\b|التكرار\s*(?:الذاتي)?|الاستدعاء\s*(?:الذاتي)?|استدعاء\s*ذاتي", re.I)),
+    # Career-curriculum topics (grounded, role-neutral deterministic bank).
+    # These run BEFORE the skill_name fallback so a plain career question can
+    # never degrade to a limitation refusal just because the provider draw
+    # failed (the NIM is frequently throttled past the spoken bound).
+    ("resume", re.compile(r"\bresumes?\b|r[eé]sum[eé]s?|curriculum\s*vitae|\bcv\b|\bcvs\b|السيرة\s*الذاتية|سيرة\s*ذاتية|سي\s*في|سى\s*فى", re.I)),
+    ("cover letter", re.compile(r"cover\s*letters?|رسالة\s*(?:تقديم|التقديم)|خطاب\s*(?:تقديم|التقديم)", re.I)),
+    ("interview", re.compile(r"\binterviews?\b|مقابلة\s*(?:عمل|شغل|وظيفة)?|مقابلات\s*(?:عمل|شغل|وظيفة)?|الانترفيو|انترفيو", re.I)),
+    ("job search", re.compile(r"\bjob\s*search(?:ing)?\b|\bsearch(?:ing)?\s*for\s*a?\s*jobs?\b|\bapplying\s*(?:to|for)\s*a?\s*jobs?\b|\bapply\s*for\s*a?\s*job\b|\blooking\s*for\s*(?:a\s+)?jobs?\b|\bfinding\s*(?:a\s+)?jobs?\b|البحث\s*(?:عن|على)\s*شغل|دوّر(?:ت)?\s*على\s*شغل|أدور\s*على\s*شغل|تدور\s*على\s*شغل|بدور\s*على\s*شغل|بتدور\s*على\s*شغل|التقديم\s*على\s*وظيفة|تقديم\s*على\s*وظيفة|تقدم(?:ت)?\s*لوظيفة", re.I)),
+    ("networking", re.compile(r"(?:career|professional|business)\s*networking|\bnetwork(?:ing)?\s*(?:with|skills|tips|advice)|\b(?:intro|get\s+to\s+know)|\bintroductions?\b|connect(?:ing)?\s*with\s*(?:professionals|people|others)|شبكة\s*علاقات|تواصل\s*مهني|التواصل\s*المهني|بني?\s*شبكة", re.I)),
+    ("linkedin", re.compile(r"linkedin|لينكد\s*إن|لينكدان", re.I)),
+    ("portfolio", re.compile(r"\bportfolios?\b|بورتفوليو|بورتوفوليو", re.I)),
+    ("salary negotiation", re.compile(r"\bsalar(?:y|ies)\b|\bwages?\b|مرتب|الراتب|راتب|التفاوض\s*على\s*(?:ال)?(?:مرتب|راتب)", re.I)),
+    ("career planning", re.compile(r"career\s*(?:plan|planning|path|goals?|change|direction)|(?:plan|planning)\s+(?:my|your|the)?\s*career|what\s+should\s+i\s+study|التخطيط\s*المهني|مستقبل(?:ي|ك)?\s*(?:المهني|الوظيفي)?|مسير(?:تي)?\s*المهنية|مسار\s*مهني|أغير\s*(?:مجالي|المجال)|غيّر\s*مجالي", re.I)),
+    ("soft skills", re.compile(r"soft\s*skills?|communication\s*skills?|\bteamwork\b|work\s*well\s*with\s*(?:others|people)|مهارات\s*(?:ال)?ناعمة|مهارات\s*تواصل|العمل\s*الجماعي|شغل\s*الفرق", re.I)),
+    ("internship", re.compile(r"\binternships?\b|\bintern(?:ing)?\b|تدريب\s*(?:صيفي|ميداني)?|فرصة\s*تدريب|انترنشيب", re.I)),
+    ("git", re.compile(r"\bgit\b|\bgithub\b|جيت\s*هاب|جيتهاب", re.I)),
 ]
 
 _GENERAL_KNOWLEDGE = {
+    "resume": {
+        "en": {
+            "plain": (
+                "A resume is a one-page summary of your skills, experience and education, built for a "
+                "specific job. You tailor it for every application — the same facts, reordered and "
+                "rephrased to fit the role."
+            ),
+            "analogy": "Think of it as your product box, not your life story: a recruiter scans it for about 6 seconds, so every line should point at the job you want.",
+            "example": "Instead of listing every course you took, lead with your most relevant project and the job title you are targeting.",
+            "practice": "Rewrite your top three bullet points so each starts with an action verb and ends with a measurable result — 'built X, reducing Y by 30%'.",
+            "tradeoff": "Length is a tradeoff: one page stays scannable, two pages show depth — the safer default for most early-career roles is one page.",
+            "question": "Want me to walk through the 6-second scan a recruiter does, line by line?",
+            "challenge": "Trim your resume to one page right now and cut one line that does not target the job.",
+        },
+        "ar": {
+            "plain": (
+                "الـ Resume صفحه واحدة بتلخّص بيها مهاراتك وخبرتك وتعليمك، وبتتكتب عشان وظيفة معينة. "
+                "بتعدّل عليها مع كل تقديم — نفس المعلومات بس ترتيبها وصياغتها بتتناسب مع الدور."
+            ),
+            "analogy": "اعتبره الكرتونة اللي بتعرّض بيها منتجك مش قصة حياتك: الـ recruiter بيمسحها في حوالي 6 ثواني، فكل سطر لازم يخدم الوظيفة اللي بتحاول تاخدها.",
+            "example": "بدل ما تسرد كل المواد اللي أخذتها، ابدأ بأهم مشروع ليك وأقرب مسمى وظيفي لهدفك.",
+            "practice": "أعد كتابة أهم 3 نقاط عندك بحيث كل واحدة تبدأ بفعل تنفيذي وتخلص بنتيجة تقدر تقيسها — 'بنيت X وعملية Y قلت ساعتها 30%'.",
+            "tradeoff": "الطول مفاضلة: صفحة واحدة أسهل في المسح، وصفحتان بتدي مساحة للعمق — والآمن في أغلب وظائف المبتدئين صفحة واحدة.",
+            "question": "تحب نمشي سوا على الـ 6 ثواني اللي بيمسح بيها الـ recruiter صفحتك سطر بسطر؟",
+            "challenge": "خلّي سيرتك صفحة واحدة دلوقتي وشيل سطر واحد مش بيخدم الوظيفة اللي مستهدفها.",
+        },
+    },
+    "cover letter": {
+        "en": {
+            "plain": (
+                "A cover letter is a short, three-to-four paragraph letter that introduces you, connects "
+                "your strengths to the job, and asks for an interview."
+            ),
+            "analogy": "Think of it as the trailer to your resume: it does not repeat everything, it makes the recruiter want to open the full package.",
+            "example": "A strong opening names the role and one concrete thing you can solve for them — not a generic 'I am writing to apply for...'.",
+            "practice": "Write a 90-second draft: one line why you, one line what you built, one line why this company, one line asking for the interview.",
+            "tradeoff": "Brevity wins: a tight page beats a long, generic letter — but skipping it entirely loses a real chance to stand out.",
+            "question": "Want to outline yours together — role, proof, and ask?",
+            "challenge": "Boil your cover letter down to those four lines and see if it still sells you.",
+        },
+        "ar": {
+            "plain": (
+                "خطاب التقديم رسالة قصيرة من 3 لـ 4 فقرات: بتقدّم نفسك، وتربط نقاط قوتك بالوظيفة، وتطلب "
+                "مقابلة."
+            ),
+            "analogy": "اعتبرها البرومو لسيرتك الذاتية: مش بتردّد كل حاجة، بتحفّز الـ recruiter يفتح الملف الكامل.",
+            "example": "البداية القوية بتسمّي الوظيفة وحاجة واحدة محددة تقدر تحلّها ليهم — مش 'بكتب عشان أتقدم للوظيفة' كسطر عام.",
+            "practice": "اكتب مسوّدة في 90 ثانية: سطر ليه إنت، سطر إنت بنيت إيه، سطر ليه الشركة دي، وسطر بيطلب المقابلة.",
+            "tradeoff": "الاختصار بيربح: صفحة مكثّفة أحسن من رسالة طويلة عامة — بس إلغاؤها خالص بيضيّع فرصة تميّز حقيقية.",
+            "question": "تحب نرسم الهيكل بتاعك سوا — الدور، الدليل، والطلب؟",
+            "challenge": "لسّع خطابك لأربع أسطر وشوف لو لسه بيبيع شغلك.",
+        },
+    },
+    "interview": {
+        "en": {
+            "plain": (
+                "An interview is a two-way conversation: they assess whether you fit, and you assess "
+                "whether the role fits you. Prepare — but do not memorize scripts."
+            ),
+            "analogy": "Think of it as a first date with a job: honesty and preparation feel better than rehearsed perfection.",
+            "example": "The best answer to 'tell me about yourself' is a 60-second arc: current role → strongest proof → why this job.",
+            "practice": "Practice the STAR shape once tonight: Situation, Task, Action, Result — one short story you can reuse.",
+            "tradeoff": "Over-prepared scripts kill listening; under-preparation kills depth. Balance it: pick three stories, stay flexible.",
+            "question": "Want a mock run of the five questions most interviewers ask first?",
+            "challenge": "Answer 'tell me about yourself' out loud in under 60 seconds right now.",
+        },
+        "ar": {
+            "plain": (
+                "المقابلة محادثة في اتجاهين: هما بيحددوا إنت مناسب ولا لأ، وإنت بتحدد الدور مناسبك ولا لأ. "
+                "استعد — بس متحفظش سكربت."
+            ),
+            "analogy": "اعتبر المقابلة اول مرة بتقابل بيها شغل: الصراحة والاستعداد أحلى من كمال محضّر بالحرف.",
+            "example": "أحسن رد على 'عرّفنا بنفسك'؟ قوس 60 ثانية: دورك الحالي → أقوى إثبات ليك → ليه الوظيفة دي.",
+            "practice": "تدرّب مرة الليلة على شكل STAR: الموقف، المهمة، الفعل، النتيجة — قصة قصيرة تقدر تعيد استخدامها.",
+            "tradeoff": "الحفظ الزايد بيموت الإنصات، وعدم التحضير بيموت العمق. التوازن: جاهز بـ3 قصص وكن مرن.",
+            "question": "تحب نعمل مراجعة على الخمس أسئلة اللي أغلب الـ interviewers بيبدؤوا بيها؟",
+            "challenge": "ردّ على 'عرّفنا بنفسك' بصوت عالي في أقل من 60 ثانية دلوقتي.",
+        },
+    },
+    "job search": {
+        "en": {
+            "plain": (
+                "A healthy job search is a system, not a lottery: a clear target role, a matching resume, "
+                "a daily routine, and a record of every application."
+            ),
+            "analogy": "Think of it as leading with your portfolio: matching matters first, then volume.",
+            "example": "Quality beats spray-and-pray: 5 tailored applications beat 50 generic ones, because recruiters read for fit.",
+            "practice": "Set one 45-minute slot a day: 10 matching searches, 3 tailored applications, 1 follow-up — same time every day.",
+            "tradeoff": "Volume buys speed; focus buys quality. Early on, focus beats volume.",
+            "question": "Want me to help you turn one job posting into a tailored resume today?",
+            "challenge": "Pick one job post and list three bullets from your background that match it directly.",
+        },
+        "ar": {
+            "plain": (
+                "البحث عن شغل نظام مش يانصيب: دور مستهدف واضح، سيرة ذاتية متطابقة، روتين يومي، ومتابعة "
+                "لكل تقديم."
+            ),
+            "analogy": "اعتبرها إنك بتتقدم أولاً بمشاريعك: المطابقة أولاً، وبعدين الكمية.",
+            "example": "الجودة بتغلب الرش العشوائي: 5 تقدمات مفصّلة أحسن من 50 عامة، لأنهم بيقروا بدورهم على الملاءمة.",
+            "practice": "خدي 45 دقيقة ثابتة كل يوم: 10 عمليات بحث مطابقة، 3 تقدمات مفصّلة، 1 متابعة — في نفس الوقت.",
+            "tradeoff": "الكمية بتعطيك سرعة، والتركيز بيديك جودة. في البداية التركيز أقوى من الكمية.",
+            "question": "تحب أساعدك النهارده تخلّي سيرتك متطابقة مع إعلان وظيفة واحد؟",
+            "challenge": "اختار إعلان وظيفة واحد واكتب 3 نقاط من خلفيتك بتطابق وظيفته مباشرة.",
+        },
+    },
+    "networking": {
+        "en": {
+            "plain": (
+                "Networking is building relationships before you need them: people refer people they "
+                "trust, so genuine contact beats cold applications."
+            ),
+            "analogy": "Think of it as watering plants: you do not ask the tree for fruit the day you plant it — you build the connection first.",
+            "example": "A short, specific message wins: 'Saw your work on X — I am building Y, could I have 15 minutes of your time?' beats a generic connection request.",
+            "practice": "This week: message two people doing the job you want, ask one specific question, and note their answers.",
+            "tradeoff": "Being useful before being needy opens doors; networking only to ask closes them fast.",
+            "question": "Want me to draft a five-line first message to one person you admire?",
+            "challenge": "Write the first two lines of a connection message to someone doing your target job.",
+        },
+        "ar": {
+            "plain": (
+                "التواصل المهني بناء علاقات قبل ما تحتاجها: الناس بترشّح اللي بيثقوا فيهم، فالتعارف "
+                "الحقيقي أقوى من التقديم البارد."
+            ),
+            "analogy": "اعتبرها زي سقاية الزرع: مبتطلبش ثمرة من الشجرة يوم ما تزرعها — بتكوّن العلاقة الأول.",
+            "example": "الرسالة القصيرة المحددة بتكسب: 'شفت شغلك في X وأنا شغال على Y، تقدر تديّني ربع ساعة؟' بتكسب على طلب اتصال عام.",
+            "practice": "الأسبوع ده: ابعث لاتنين شغالين في الوظيفة اللي بتحلم بيها، اسألهم سؤال محدد، واكتب إجاباتهم.",
+            "tradeoff": "إنك تفيد قبل ما تطلب بيفتح الأبواب؛ والتواصل عشان الطلب بس بيقفلها بسرعة.",
+            "question": "تحب أكتب لك رسالة أولى من خمس سطور لواحد بتحب تتواصل معاه؟",
+            "challenge": "اكتب أول سطرين لرسالة تواصل لواحد شغال في وظيفتك المستهدفة.",
+        },
+    },
+    "linkedin": {
+        "en": {
+            "plain": (
+                "LinkedIn is your always-on professional page: a clear headline, a story-driven summary, "
+                "and evidence — projects and results — that back the claims."
+            ),
+            "analogy": "Think of it as a storefront that opens even at 2am — recruiters browse it before they ever meet you.",
+            "example": "A strong headline is not 'Student looking for a job' — it is 'Frontend developer · built 3 shipped projects'.",
+            "practice": "Update your headline, then add one result to your top experience bullet (numbers, not adjectives) this week.",
+            "tradeoff": "A polished profile opens doors, but only activity — posting and engaging — keeps the algorithm and people coming back.",
+            "question": "Want me to give you a three-line summary opening you can personalize?",
+            "challenge": "Rewrite your headline in under 10 words so it names what you do and one proof.",
+        },
+        "ar": {
+            "plain": (
+                "LinkedIn صفحتك المهنية اللي دايمًا شغالة: عنوان واضح، نبذة بتحكي قصتك، وأدلة — مشاريع "
+                "ونتائج — بتأيد الكلام."
+            ),
+            "analogy": "اعتبرها واجهة محل مفتوح حتى الساعة 2 بالليل — الـ recruiters بيفحصوها قبل ما يقابلوهم.",
+            "example": "العنوان القوي مش 'طالب بدوّر على شغل' — هو 'مطوّر Frontend · عملت 3 مشاريع شغالة'.",
+            "practice": "حدّث العنوان، وبعدين ضيف نتيجة واحدة بالأرقام لأهم نقطة خبرة عندك الأسبوع ده.",
+            "tradeoff": "البروفايل المحسّن بيفتح أبواب، بس النشاط — نشر وتفاعل — هو اللي بيرجّع الناس والـ algorithm ليك.",
+            "question": "تحب أديّك فتحة نبذة من تلات سطور تقدّمها على مزاجك؟",
+            "challenge": "أعد كتابة عنوانك في أقل من 10 كلمات بحيث يسمّي إنت بتعمل إيه ودليل واحد ليك.",
+        },
+    },
+    "portfolio": {
+        "en": {
+            "plain": (
+                "A portfolio proves you can do the work: real projects with a short description — the "
+                "problem, what you used, and the result — linked from your resume."
+            ),
+            "analogy": "Think of it as showing the kitchen to the customer instead of just the menu: proof beats promises.",
+            "example": "Three solid projects beat nine unfinished ones — depth, clean code, and a one-line 'why' for each.",
+            "practice": "Give one project a 'problem → build → result' story header today and link it on your resume.",
+            "tradeoff": "Breadth shows range; depth shows mastery — a focused portfolio that shows mastery usually wins early.",
+            "question": "Want me to help you phrase the story of your best project?",
+            "challenge": "Write your best project's tagline in one sentence — problem, stack, impact.",
+        },
+        "ar": {
+            "plain": (
+                "الـ Portfolio بيإثبت إنك تقدر تشتغل فعلاً: مشاريع حقيقية مع وصف قصير — المشكلة، اللي "
+                "استخدمته، والنتيجة — ومربوطة من سيرتك الذاتية."
+            ),
+            "analogy": "اعتبرها إنك بتوري العميل المطبخ بدل ما توريوه الأكل في القايمة: الدليل أقوى من الوعود.",
+            "example": "تلات مشاريع مكتملة أحسن من تسعة ناقصة — عمق، كود نظيف، وسطر واحد ليه المشروع ده.",
+            "practice": "النهارده اكتب شكل 'المشكلة → البناء → النتيجة' لأهم مشروع واربطه بالسيرة الذاتية.",
+            "tradeoff": "الاتساع بيوري التنوع، والعمق بيوري الإتقان — بورتوفوليو مركّز بيوري إتقان غالبًا بيكسب في البداية.",
+            "question": "تحب أساعدك تصيغ قصة أحسن مشروع عندك؟",
+            "challenge": "اكتب شعار أحسن مشروع ليك في جملة واحدة — المشكلة، التقنيات، الأثر.",
+        },
+    },
+    "salary negotiation": {
+        "en": {
+            "plain": (
+                "Salary negotiation is a normal, expected conversation — never a fight. Anchor on market "
+                "data and the value you bring, not on need."
+            ),
+            "analogy": "Think of it as buying a car: the first number sets the range, so research before you name yours.",
+            "example": "A balanced line: 'Based on market data for this role in Cairo, I was expecting 15-20k — can we get closer to that?'",
+            "practice": "Before any offer, write one number you are happy with, one you would walk away from, and a data source for both.",
+            "tradeoff": "Asking for too little wins the job and loses value; asking without data can seem entitled — research makes it confident.",
+            "question": "Want to rehearse the counter-offer line for a real number you have in mind?",
+            "challenge": "Find a salary range for your target role in your city before you open your next job posting.",
+        },
+        "ar": {
+            "plain": (
+                "التفاوض على المرتب محادثة طبيعية ومتوقعة — مش معركة. ابدأ من بيانات السوق وقيمتك مش "
+                "من احتياجك."
+            ),
+            "analogy": "اعتبرها زي شراء عربية: أول رقم هو اللي بيحدد المدى، فابحث قبل ما تقول رقمك.",
+            "example": "جملة متوازنة: 'حسب بيانات السوق للدور ده في القاهرة كنت متوقع 15-20 ألف — ممكن نقرب من الرقم ده؟'",
+            "practice": "قبل أي عرض اكتب رقم يريّحك، رقم تمشي عنده، ومصدر بيانات للتنتين.",
+            "tradeoff": "طلب القليل بياخد الوظيفة ويضيّع القيمة؛ والطلب من غير بيانات ممكن يبان غرور — البحث هو اللي بيخليه واثق.",
+            "question": "تحب نتمرّن على جملة الرد على عرض برقم معين عندك؟",
+            "challenge": "لاقي مدى المرتب لوظيفتك المستهدفة في مدينتك قبل ما تفتح إعلان الوظيفة الجاي.",
+        },
+    },
+    "career planning": {
+        "en": {
+            "plain": (
+                "Career planning is deciding a direction, then making small moves toward it: a target "
+                "role, the skills it needs, and a 6-month plan."
+            ),
+            "analogy": "Think of a career as a road you build while walking: the direction matters more than picking the perfect first job.",
+            "example": "Compare two roles with three questions: What do people in them do daily? What skills repeat? What pays early on?",
+            "practice": "Write your target role in one line, the top 3 skills for it, and one class or project you can start this month.",
+            "tradeoff": "Planning protects you from random moves; over-planning delays action — ship a small step every week.",
+            "question": "Want me to help you break your target role into a 6-month skill map?",
+            "challenge": "Write down the ONE step that moves you toward your role that you can do this week.",
+        },
+        "ar": {
+            "plain": (
+                "التخطيط المهني هو إنك تحدّد اتجاه، وبعدين تاخد خطوات صغيرة في اتجاهه: دور مستهدف، "
+                "المهارات اللي بيحتاجها، وخطة 6 شهور."
+            ),
+            "analogy": "اعتبرها طريق بتبنيه وأنت بتمشي: الاتجاه أهم من اختيار أول شغلانة مثالية.",
+            "example": "قارن بين وظيفتين بثلاث أسئلة: بيشتغلوا إيه يوميًا؟ إيه المهارات المتكررة؟ المرتب الجيد بيبدأ منين؟",
+            "practice": "اكتب دورك المستهدف في سطر واحد، وأهم 3 مهارات ليه، وكورس أو مشروع تقدر تبدأه الشهر ده.",
+            "tradeoff": "التخطيط بيحميك من الخطوات العشوائية؛ والتنظيم الزايد بيأجّل الفعل — اخلع خطوة صغيرة كل أسبوع.",
+            "question": "تحب أساعدك تقسّم دورك المستهدف على خريطة مهارات 6 شهور؟",
+            "challenge": "اكتب الخطوة الواحدة اللي بتقرّبك من دورك وتقدر تعملها الأسبوع ده.",
+        },
+    },
+    "soft skills": {
+        "en": {
+            "plain": (
+                "Soft skills — communication, teamwork, problem-solving — are how you apply technical "
+                "skill with people. They are the difference between talented and effective."
+            ),
+            "analogy": "Think of technical skills as the engine and soft skills as the steering wheel: power without direction does not arrive.",
+            "example": "A clear 'I will own this and report by Thursday' beats silent competence every time a team is watching.",
+            "practice": "Practice one skill visibly this week: ask one clarifying question in meetings or summarize someone's point back to them.",
+            "tradeoff": "People get hired for technical skill and fired for soft-skill failures — both matter, but the second is non-negotiable.",
+            "question": "Want to pick one soft skill and build a 2-week habit around it?",
+            "challenge": "This week, summarize one person's idea in your own words and watch the reaction.",
+        },
+        "ar": {
+            "plain": (
+                "المهارات الناعمة — التواصل والعمل الجماعي وحل المشاكل — هي اللي بتطبّق بيها المهارة "
+                "التقنية مع الناس. هي الفرق بين موهوب وفعّال."
+            ),
+            "analogy": "المهارة التقنية محرك والمهارات الناعمة عجلة القيادة: قوة من غير توجيه مش بتوصل.",
+            "example": "جملة واضحة 'أنا هاخد المسؤولية وأرد عليكم يوم الخميس' بتكسب على الكفاءة الصامتة لما الفريق بيتبعك.",
+            "practice": "مارس مهارة واحدة بشكل واضح الأسبوع ده: اسأل سؤال توضيحي في الاجتماع، أو لخّص كلام حد ليهم.",
+            "tradeoff": "الناس بتتنيوا على المهارة التقنية وبيتطردوا على فشل المهارات الناعمة — الاتنين مهمين، بس التاني غير قابل للتفاوض.",
+            "question": "تحب نختار مهارة ناعمة واحدة ونبني عاداتها على أسبوعين؟",
+            "challenge": "الأسبوع ده لخّص فكرة حد بكلامك واتفرج على ردة الفعل.",
+        },
+    },
+    "internship": {
+        "en": {
+            "plain": (
+                "An internship is a short, supervised work placement that trades your time for real "
+                "experience and professional references — the fastest resume-builder early on."
+            ),
+            "analogy": "Think of it as test-driving a career: you see the job from the inside without committing to it for life.",
+            "example": "Even a small internship wins over none: one supervised project, one reference, one line on your resume that future recruiters read.",
+            "practice": "Choose internships that match a skill you want on your CV, not just any opening — write a want-list of three this week.",
+            "tradeoff": "Pay vs. growth: low pay with a great mentor beats high pay with nothing to do — optimize for what you will learn.",
+            "question": "Want me to help you turn one internship experience into a strong resume bullet?",
+            "challenge": "Write your last real project as the experience bullet you would put on an internship application.",
+        },
+        "ar": {
+            "plain": (
+                "الـ Internship فرصة شغل قصيرة تحت إشراف، بتدي وقتك مقابل خبرة حقيقية ورسائل توصية — "
+                "أسرع حاجة بتكوّن سيرتك في البداية."
+            ),
+            "analogy": "اعتبرها تجربة قيادة لمهنتك: بتشوف الشغل من جوه من غير ما تلزم نفسك بيه للأبد.",
+            "example": "حتى internship صغيرة بتكسب على عدمها: مشروع واحد تحت إشراف، مرجع واحد، وسطر واحد في سيرتك بيقروه مستقبلًا.",
+            "practice": "اختار internships بتطابق مهارة نفسك تضيفها للسيرة مش أي فرصة — اكتب لائحة الـ3 المطلوبين الأسبوع ده.",
+            "tradeoff": "المرتب مقابل النمو: مرتب قليل مع mentor محترم أحسن من مرتب عالي من غير شغل — حسّن عشان اللي هتتعلمه.",
+            "question": "تحب أساعدك تحوّل تجربة internship واحدة لنقطة قوية في السيرة الذاتية؟",
+            "challenge": "اكتب آخر مشروع حقيقي ليك كتجربة هتحطها في طلب الـ internship.",
+        },
+    },
+    "git": {
+        "en": {
+            "plain": (
+                "Git is a version-control system that snapshots your code over time, so you can "
+                "experiment, compare versions and undo mistakes — and collaborate without overwriting "
+                "each other."
+            ),
+            "analogy": "Think of it as save points in a game: commit often, and you can always rewind to a good checkpoint.",
+            "example": "The workflow that fixes most chaos: branch → change → commit → merge, and keep main always working.",
+            "practice": "In your next project, commit at least once per session with small, honest messages — and never work on main alone.",
+            "tradeoff": "Git adds a little ceremony up front, but it removes the fear of breaking things — worth it from your first real project.",
+            "question": "Want a 10-minute walkthrough of the everyday commit and merge loop?",
+            "challenge": "Initialize a repo and make one commit tonight, then show it to someone.",
+        },
+        "ar": {
+            "plain": (
+                "Git نظام بياخد لقطات (versions) من الكود بتاعك مع الوقت، فتقدر تجرب وتقارن وترجع لأي "
+                "نسخة — وتشتغل مع زميلك من غير ما يمسح شغل بعض."
+            ),
+            "analogy": "اعتبرها زي نقاط الحفظ في لعبة: اعمل commit كل شوية، وتقدر ترجع لأي نقطة سليمة.",
+            "example": "الشغل اللي بيحل معظم الفوضى: branch → تعدّل → commit → merge، وخلي main دايمًا شغالة.",
+            "practice": "في مشروعك الجاي اعمل commit مرة على الأقل كل جلسة برسايل صغيرة صادقة — ومتشتغلش على main لوحدك.",
+            "tradeoff": "Git بضيف شوية مواعين في الأول، بس بيشيل خوف التكسير — مستاهلة من أول مشروع حقيقي.",
+            "question": "تحب نعدّي على 10 دقايق على حلقة الـ commit والـ merge اليومية؟",
+            "challenge": "اعمل initial commit لملف واحد النهارده ووريه لحد.",
+        },
+    },
     "photosynthesis": {
         "en": {
             "plain": (
@@ -2774,6 +3585,24 @@ def _detect_length_request(question):
     if _LENGTH_SIMPLE_REFERENCE.search(q):
         return "simple"
     return None
+
+
+# Spoken turns that may take the fuller (default) token budget: explicit depth
+# requests or an explicit step-by-step / long-example ask. Everything else stays
+# on the small Live budget so a simple question is answered fast, never cut.
+_SPOKEN_FULLER_REFERENCE = re.compile(
+    r"\bstep\s*[- ]?by\s*[- ]?step\b|\b(?:a\s+)?long\s+example\b|"
+    r"\bdetailed\s+explanation\b|\bexplain\s+in\s+detail\b|"
+    r"\bخطوة\s*بخطوة\b|\bبخطوات\b|\bبالخطوات\b|\bمثال\s*طويل\b|"
+    r"\bشرح\s*مفصل\b",
+    re.IGNORECASE,
+)
+
+
+def _wants_fuller_spoken_reply(question):
+    if _detect_length_request(question) in ("deep", "more"):
+        return True
+    return bool(_SPOKEN_FULLER_REFERENCE.search(str(question or "")))
 
 
 def _is_confusion_request(question):
@@ -4504,7 +5333,7 @@ def _persona_line_image(identity):
     )
 
 
-def _tutor_system(lang, intent, mode, tutor_id, question, persona, personality):
+def _tutor_system(lang, intent, mode, tutor_id, question, persona, personality, *, spoken=False):
     """Build the exact tutor system prompt (used by ``tutor_reply``).
 
     Factored out so the exact prompt sent to the provider can be inspected
@@ -4539,6 +5368,7 @@ def _tutor_system(lang, intent, mode, tutor_id, question, persona, personality):
         + ((" " + style) if style else "")
         + ((" " + confusion_instr) if confusion_instr else "")
         + ((" " + length_instr) if length_instr else "")
+        + ((" " + _SPOKEN_RULE) if spoken else "")
         + " " + LANG_INSTRUCTIONS.get(lang, LANG_INSTRUCTIONS["en"])
         + " " + _intent_instruction(intent)
         + " " + lang_lock
@@ -4553,7 +5383,7 @@ def _tutor_system(lang, intent, mode, tutor_id, question, persona, personality):
     return system
 
 
-def tutor_reply(question, student_context=None, skill_name=None, target_role=None, tutor_id=None, mode=None, language=None, personality=None, conversation_memory=None):
+def tutor_reply(question, student_context=None, skill_name=None, target_role=None, tutor_id=None, mode=None, language=None, personality=None, conversation_memory=None, *, spoken=False):
     """Return a personalized tutor answer, styled by ``tutor_id`` persona.
 
     ``tutor_id`` is one of nova/axel/sage/vex (see ``TUTOR_PERSONAS``). When
@@ -4592,12 +5422,17 @@ def tutor_reply(question, student_context=None, skill_name=None, target_role=Non
         # A pure greeting always gets the persona's own greeting — never an
         # identity-echo, meta-commentary ("You said hello..."), or an offer.
         return greeting
+    if spoken:
+        spoken_identity = _short_spoken_identity(question, persona_id=tutor_id, language=lang)
+        if spoken_identity:
+            # Live first-turn identity: deterministic, provider-free, short.
+            return spoken_identity
     persona = TUTOR_PERSONAS.get((tutor_id or "").lower())
     intent = _classify_tutor_turn(
         question, skill_name=skill_name, target_role=target_role, mode=mode,
         student_context=student_context,
     )
-    system = _tutor_system(lang, intent, mode, tutor_id, question, persona, personality)
+    system = _tutor_system(lang, intent, mode, tutor_id, question, persona, personality, spoken=spoken)
     trusted_context = _context_for_intent(intent, student_context, skill_name, target_role)
     user = (
         f"Context route: {intent}\n"
@@ -4673,7 +5508,17 @@ def tutor_reply(question, student_context=None, skill_name=None, target_role=Non
     fallback = _tutor_fallback(question, skill_name, target_role, student_context, tutor_id, lang,
                                intent=intent, conversation_memory=conversation_memory)
 
-    reply = _complete_visible(system, user, fallback, lang, persona_id=tutor_id)
+    reply = _complete_visible(
+        system, user, fallback, lang, persona_id=tutor_id,
+        max_tokens=(
+            None if (not spoken or _wants_fuller_spoken_reply(question))
+            else _SPOKEN_MAX_TOKENS
+        ),
+        timeout=(_SPOKEN_TIMEOUT_SECONDS if spoken else None),
+        model=(_live_fast_model() if spoken else None),
+        retries=(0 if spoken else None),
+        skip_provider_fail_retry=bool(spoken),
+    )
     if intent != "IDENTITY":
         reply = _strip_unrequested_mentor_intro(
             reply,

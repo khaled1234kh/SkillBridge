@@ -3,7 +3,7 @@ import { useApp } from '../AppContext'
 import { api } from '../lib/api'
 import { RELOCATION_MARKETS, marketLabel } from '../lib/markets'
 import type { RoleRecord, Student, Skill, RolesResponse, EscoOccupation, Analysis, RoleRecommendation, RoleRecommendationsResponse, SavedRolesResponse, ScenarioLibrary, RoleMappingMatch, RoleMappingTarget, RoleMappingEvent, RecentRole, RoleProvenance, RecentJob, RecentJobsResponse } from '../lib/types'
-import { IconPlus, IconEdit, IconTrash, IconUpload, IconSearch, IconCheck, IconTarget, IconBookmark, IconCompare, IconBack, IconShield, IconBolt, IconArrowRight } from '../components/Icons'
+import { IconPlus, IconEdit, IconTrash, IconUpload, IconSearch, IconCheck, IconAlert, IconTarget, IconBookmark, IconCompare, IconBack, IconShield, IconBolt, IconArrowRight } from '../components/Icons'
 import { SkillTag, GapPill } from '../components/widgets'
 import { IconRoles } from '../components/Icons'
 import { ConfirmModal, ToastRegion, useToast } from '../components/ui'
@@ -596,7 +596,11 @@ function RoleDetailsModal({ role, noCvSkills, profileByName, cvSkillNames, selec
                 <span className="srb-dot" aria-hidden="true" />
                 <span className="srb-skill-name">{humanizeTopicLabel(s.name)} <small>{s.required_level}</small></span>
                 <span className="srb-skill-state">
-                  {status === 'have' ? '✓ you have this' : status === 'developing' ? '⚠ leveling up' : '○ missing'}
+                  {status === 'have'
+                    ? <><IconCheck size={12} /> you have this</>
+                    : status === 'developing'
+                      ? <><IconAlert size={12} /> leveling up</>
+                      : <><span className="fa-dot" aria-hidden="true" /> missing</>}
                 </span>
               </li>
             ))}
@@ -702,7 +706,11 @@ function RoleDetailsDrawer({ role, others, match, noCvSkills, profileByName, evi
             <span className="srb-skill-name">{humanizeTopicLabel(s.name)} <small>{s.required_level}</small>{s.skill_kind === 'optional' && <small className="rd-kind">optional</small>}</span>
             <span className={`rd-ev ${ev}`}>{ev === 'verified' ? 'verified' : ev === 'self' ? 'self-report' : 'no evidence'}</span>
             <span className="srb-skill-state">
-              {status === 'have' ? '✓ you have this' : status === 'developing' ? '⚠ leveling up' : '○ missing'}
+              {status === 'have'
+                    ? <><IconCheck size={12} /> you have this</>
+                    : status === 'developing'
+                      ? <><IconAlert size={12} /> leveling up</>
+                      : <><span className="fa-dot" aria-hidden="true" /> missing</>}
             </span>
           </li>
         ))}

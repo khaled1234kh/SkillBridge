@@ -180,6 +180,12 @@ def test_trusted_career_questions_still_get_career_context(
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"tutor_id": "nova"})
 
+    # Prime the thread first: Phase 4A intentionally keeps per-conversation
+    # trusted context off the FIRST message of a fresh thread, so the trusted
+    # target-role assertion must come after a real priming turn (documented
+    # stale-test precedent from test_tutor_trust_language_phase2.py).
+    _chat(client, student_id, h, "Explain Docker volumes.")
+
     captured = _capture_complete(monkeypatch)
     r = _chat(client, student_id, h, "What is my target role according to SkillBridge?")
     user = captured["user"]

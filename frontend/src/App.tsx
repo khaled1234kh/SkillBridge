@@ -9,7 +9,7 @@ import AssessmentsPage from './pages/AssessmentsPage'
 import UniversityPage from './pages/UniversityPage'
 import PublicProfilePage from './pages/PublicProfilePage'
 import { api } from './lib/api'
-import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout, IconAlert, IconTarget, IconBell, IconChevron, IconBolt, IconSparkles } from './components/Icons'
+import { IconDashboard, IconRoles, IconLearning, IconAssessment, IconUniversity, IconLogout, IconAlert, IconTarget, IconBell, IconChevron, IconBolt, IconSparkles, IconMenu, IconXClose } from './components/Icons'
 import SuccessAnimationOverlay from './components/SuccessAnimationOverlay'
 import ErrorBoundary from './components/ErrorBoundary'
 import { CopilotPanel } from './components/CopilotPanel'
@@ -129,7 +129,7 @@ function Shell() {
             <span className="sidebar-wordmark">SkillBridge</span>
           </div>
         </div>
-        <button className="nav-close" aria-label="Close menu" onClick={() => setNavOpen(false)}>✕</button>
+        <button className="nav-close" aria-label="Close menu" onClick={() => setNavOpen(false)}><IconXClose size={16} /></button>
         <nav className="main-nav">
           {visibleNav.map((n) => (
             n.href ? (
@@ -178,7 +178,7 @@ function Shell() {
           )}
           <header className="topbar">
           <div>
-            <button className="nav-toggle" aria-label="Open menu" onClick={() => setNavOpen(true)}>☰</button>
+            <button className="nav-toggle" aria-label="Open menu" onClick={() => setNavOpen(true)}><IconMenu size={20} /></button>
             <div>
               <p className="eyebrow">Verified skill loop</p>
               <h2>{titles[section]}</h2>

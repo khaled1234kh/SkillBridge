@@ -7,7 +7,8 @@ import { TUTOR_PROFILES, TutorAbout } from './learning'
 import type { TutorId } from '../lib/tutorProfiles'
 import { effectiveLanguage, LANGUAGE_LABELS, LANGUAGE_SHORT, quickActionsFor, TUTOR_LANGUAGES, tutorUi } from '../lib/tutorI18n'
 import { useBrowserSpeech } from '../hooks/useBrowserSpeech'
-import { useVoiceSession } from '../hooks/useVoiceSession'
+import { isBraveBrowser } from '../lib/browserDetect'
+import { resolveInitialLiveLang, useVoiceSession } from '../hooks/useVoiceSession'
 import { VoiceMode } from './VoiceMode'
 import { PersonaMenu } from './PersonaMenu'
 import { MoreMenu } from './MoreMenu'
@@ -80,6 +81,10 @@ export function CopilotPanel() {
   const [interviewVoiceState, setInterviewVoiceState] = useState<InterviewVoiceState>('student_ready')
   const [typedFallbackOpen, setTypedFallbackOpen] = useState(false)
   const [voiceOpen, setVoiceOpen] = useState(false)
+  // Explicit Live speech language (EN | Arabic). Live Voice has NO Auto mode:
+  // resolved to an explicit locale when Live opens (see startLiveVoice) and then
+  // switched mid-session only through the in-surface EN | عربي selector.
+  const [voiceLang, setVoiceLang] = useState<'en' | 'ar'>('en')
   const [copiedKey, setCopiedKey] = useState<string | null>(null)
   const [ratings, setRatings] = useState<Record<string, ResponseRating | null | undefined>>({})
   const [retryingKey, setRetryingKey] = useState<string | null>(null)
@@ -100,6 +105,10 @@ export function CopilotPanel() {
   // The tutor's working mode before an interview, restored by "Return to Chat".
   const prevModeRef = useRef<TutorMode>('chat')
   const speech = useBrowserSpeech()
+  // Brave ships Chromium's Web Speech API, but cannot reach Google's speech
+  // servers (network-blocked), so browser STT hangs or loops on empty errors.
+  // Detect it and drive Live voice through the server-side STT recorder.
+  const isBrave = isBraveBrowser()
 
   const tutor = TUTOR_PROFILES.find((t) => t.id === tutorId) || TUTOR_PROFILES[0]
   const lang = effectiveLanguage(language, lastReply)
@@ -219,7 +228,8 @@ export function CopilotPanel() {
   const interviewLocked = interview.phase === 'starting' || interview.phase === 'active'
 
   const skillName = items.find((item) => item.skill_id === copilot.skillId)?.skill_name
-  const topicName = copilot.competency || skillName || 'your current topic'
+  const topicName = copilot.competency || skillName || ''
+  const topicReal = topicName !== ''
 
   const quickActions = quickActionsFor(lang, tutorId, mode, topicName)
 
@@ -238,24 +248,38 @@ export function CopilotPanel() {
   const voice = useVoiceSession({
     studentId,
     tutor: tutorId,
-    language: lang,
+    language: voiceLang,
     recognitionSupported: speech.recognitionSupported,
-    send: async (text, signal) => {
+    skipBrowserStt: isBrave,
+    send: async (text, signal, sessionOpts) => {
       const conversationId = await ensureChatConversation()
-      return api.tutorSendAbortable(studentId, text, {
-        skillId: copilot.skillId,
-        page: copilot.page,
-        competency: copilot.competency,
-        jobTitle: copilot.jobTitle,
-        jobUrl: copilot.jobUrl,
-        tutorId,
-        mode,
-        language,
-        conversationId,
-      }, signal).then((res) => {
+      try {
+        const res = await api.tutorSendAbortable(studentId, text, {
+          skillId: copilot.skillId,
+          page: copilot.page,
+          competency: copilot.competency,
+          jobTitle: copilot.jobTitle,
+          jobUrl: copilot.jobUrl,
+          tutorId,
+          mode,
+          // Explicit Live speech language: the engine always passes the current
+          // selection (or a mid-session switch), never an Auto preference, so
+          // the mentor replies (and speaks) in the user's chosen language.
+          language: sessionOpts?.language ?? voiceLang,
+          conversationId,
+          spoken: true,
+        }, signal)
         upsertConversation(res.conversation)
         return res.reply ?? res.content ?? ''
-      })
+      } catch (err) {
+        // Keep the engine's own error handling; surface only safe diagnostics.
+        console.info('[voice-live] tutor.http_error', {
+          mentor: tutorId,
+          status: (err as { status?: number })?.status ?? null,
+          kind: (err as { name?: string })?.name ?? 'Error',
+        })
+        throw err
+      }
     },
     onAssistantReply: (replyText) => {
       if (!replyText) return
@@ -757,6 +781,12 @@ export function CopilotPanel() {
     if (!speech.recognitionSupported) { setVoiceNote(ui.voiceUnsupported); return }
     stopChatDictation()
     setVoiceNote('')
+    // Explicit Live language: an already-explicit chat preference (English /
+    // Arabic) opens Live in that language; an Auto chat preference is NEVER
+    // silently treated as English — we use the last explicitly selected Live
+    // language if one was saved, else a clear deterministic default (English),
+    // and the visible EN | عربي control in the surface stays obvious.
+    setVoiceLang(resolveInitialLiveLang(language))
     void ensureChatConversation()
       .then(() => setVoiceOpen(true))
       .catch((e) => {
@@ -810,10 +840,12 @@ export function CopilotPanel() {
       <div className="copilot-bar">
         <button className="copilot-bar-main" onClick={() => setOpen(!open)} aria-expanded={open} aria-label="AI Tutor panel">
           <img className="copilot-avatar" src={tutor.avatar} alt={tutor.name} />
-          <span className="copilot-bar-copy">
-            <strong>{tutor.name} · {ui.copilotBar}</strong>
-            <small>{barSubtitle}</small>
-          </span>
+          {!open && (
+            <span className="copilot-bar-copy">
+              <strong>{tutor.name} · {ui.copilotBar}</strong>
+              <small>{barSubtitle}</small>
+            </span>
+          )}
           <IconChevron size={16} className={`copilot-chev ${open ? 'open' : ''}`} />
         </button>
         <button
@@ -937,8 +969,12 @@ export function CopilotPanel() {
             )}
 
             <div className="copilot-context">
-              <span className="context-item"><IconShield size={12} /> {ui.talkingAbout} <strong>{topicName}</strong></span>
-              <span className="context-divider" />
+              {topicReal && (
+                <>
+                  <span className="context-item"><IconShield size={12} /> {ui.talkingAbout} <strong>{topicName}</strong></span>
+                  <span className="context-divider" />
+                </>
+              )}
               <span className="context-item muted">{contextTitle}</span>
             </div>
           </div>
@@ -1252,7 +1288,7 @@ export function CopilotPanel() {
           )}
 
           {voiceOpen && (
-            <VoiceMode voice={voice} tutor={tutor} lang={lang} ui={ui} onClose={() => setVoiceOpen(false)} />
+            <VoiceMode voice={voice} tutor={tutor} lang={lang} ui={ui} studentId={studentId} onClose={() => setVoiceOpen(false)} />
           )}
         </div>
       )}

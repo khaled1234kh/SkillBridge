@@ -57,6 +57,19 @@ def _tutor(client, student_id, headers, body=None):
                        headers=headers)
 
 
+def _prime(client, student_id, headers):
+    """Past the backend fresh-thread context gating: a FIRST message is
+    intentionally persona/language-only (main.api_tutor_chat nulls the per-page
+    trusted context on a fresh thread — a first turn can never fabricate
+    "earlier in our session..." content). The NEXT turn then receives the
+    trusted per-page context these context-aware tests assert on."""
+    r = client.post(f"/api/students/{student_id}/tutor",
+                    json={"message": "Let's get started.", "page": "dashboard"},
+                    headers=headers)
+    assert r.status_code == 200
+    return r
+
+
 # ------------------------------------------------------------------ canonical definition + validation
 
 def test_language_definition_is_canonical():
@@ -366,6 +379,7 @@ def test_dashboard_arabic_context(client, student_id, auth_headers, monkeypatch)
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"language": "ar"})
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {
         "page": "dashboard", "message": "إيه أكتر حاجة موقفاني عن الوظيفة اللي أنا عاوزها؟"})
     assert r.status_code == 200 and r.json()["language"] == "ar"
@@ -379,6 +393,7 @@ def test_learning_arabic_context(client, student_id, auth_headers, monkeypatch):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"language": "ar"})
+    _prime(client, student_id, h)
     python = models.get_skill_by_name("Python")["id"]
     r = _tutor(client, student_id, h, {
         "page": "learning", "skill_id": python, "competency": "containers",
@@ -393,6 +408,7 @@ def test_jobs_arabic_context(client, student_id, auth_headers, monkeypatch):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"language": "ar"})
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {
         "page": "jobs", "job_title": "Junior Backend Engineer", "message": "هل أقدم على الوظيفة دي؟"})
     assert r.status_code == 200 and r.json()["language"] == "ar"
@@ -404,6 +420,7 @@ def test_roadmap_arabic_context(client, student_id, auth_headers, monkeypatch):
     captured = _capture_complete(monkeypatch)
     h = auth_headers("aisha@student.edu")
     _set_pref(client, student_id, h, {"language": "ar"})
+    _prime(client, student_id, h)
     r = _tutor(client, student_id, h, {"page": "career_roadmap", "message": "أعمل إيه بعد كده؟"})
     assert r.status_code == 200 and r.json()["language"] == "ar"
     assert has_arabic(r.json()["reply"])

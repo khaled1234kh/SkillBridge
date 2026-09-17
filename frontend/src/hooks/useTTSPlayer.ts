@@ -21,6 +21,8 @@ interface TtsResponse {
 }
 
 /** Abortable POST to the existing /tutor/tts endpoint ({tutor, text} body). */
+export const TTS_FETCH_TIMEOUT_MS = 30_000
+
 export function fetchTutorTtsBlob(
   studentId: number,
   tutor: string,
@@ -30,11 +32,15 @@ export function fetchTutorTtsBlob(
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
   const token = getToken()
   if (token) headers['Authorization'] = `Bearer ${token}`
+  const controller = new AbortController()
+  const timer = window.setTimeout(() => controller.abort(), TTS_FETCH_TIMEOUT_MS)
+  const onOuterAbort = () => controller.abort()
+  signal?.addEventListener('abort', onOuterAbort, { once: true })
   return fetch(`/api/students/${studentId}/tutor/tts`, {
     method: 'POST',
     headers,
     body: JSON.stringify({ tutor, text }),
-    signal,
+    signal: controller.signal,
   }).then(async (res: TtsResponse) => {
     if (!res.ok) {
       let detail = `Request failed: ${res.status}`
@@ -44,9 +50,14 @@ export function fetchTutorTtsBlob(
           detail = typeof data.detail === 'string' ? data.detail : JSON.stringify(data.detail)
         }
       } catch { /* non-JSON error body */ }
-      throw new Error(detail)
+      const err = new Error(detail) as Error & { status?: number }
+      err.status = res.status
+      throw err
     }
     return res.blob()
+  }).finally(() => {
+    window.clearTimeout(timer)
+    signal?.removeEventListener('abort', onOuterAbort)
   })
 }
 
@@ -67,9 +78,28 @@ export function playTtsBlob(blob: Blob): PlaybackHandle {
     cleanup()
     resolveDone()
   }
+
+  // The reply plays AFTER the /tutor + /tutor/tts round trip, so it can fall
+  // outside the original user gesture and hit the browser autoplay policy. A
+  // rejected play() must NOT be swallowed as a silent end (the mentor would
+  // appear to 'reply' with no audio at all): retry on the next user gesture
+  // (tap anywhere) and only finish when playback genuinely ends/errors.
+  let retrying = false
+  const tryPlay = () => {
+    audio.play().catch(() => {
+      if (resolved || retrying) return
+      retrying = true
+      const retry = () => {
+        retrying = false
+        tryPlay()
+      }
+      window.addEventListener('pointerdown', retry, { once: true })
+      window.addEventListener('touchend', retry, { once: true })
+    })
+  }
   audio.onended = finish
   audio.onerror = finish
-  void audio.play().catch(finish)
+  tryPlay()
   return {
     stop() {
       try { audio.pause() } catch { /* already stopped */ }

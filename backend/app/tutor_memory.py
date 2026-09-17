@@ -21,8 +21,10 @@ on its own.
 """
 
 import re
+import threading
 
 from .database import get_cursor
+from . import genai
 from . import models
 
 # Number of the most recent messages sent verbatim to the LLM. Anything older
@@ -218,6 +220,58 @@ def clear_memory(student_id, tutor_id, conversation_id=None):
     return True
 
 
+def _enrich_digest_with_artifact(to_fold, previous):
+    """OPTIONAL background enrichment of a folded digest via the career-artifact
+    model (``ARTIFACT_MODEL``). Route-only for long-horizon, latency-tolerant
+    work: never blocks a reply (background thread), never required, and never
+    replaces the deterministic digest — if the provider is down, slow, or not
+    configured, this returns "" and the deterministic summary stands. The stored
+    summary is BOUNDED (``SUMMARY_CHAR_CAP``) either way, so prompt memory stays
+    bounded forever regardless of provider behavior."""
+    if not genai.artifact_model_enabled():
+        return ""
+    chunk = [m for m in (to_fold or []) if m]
+    if not chunk:
+        return ""
+    digest = build_chunk_digest(chunk)
+    if not digest:
+        return ""
+    llm_messages = [
+        m for m in chunk
+        if (m.get("content") or "").strip() and m.get("role") in ("user", "assistant")
+    ]
+    speaker = {"user": "Student", "assistant": "Mentor"}
+    transcript = "\n".join(
+        f"{speaker.get(m.get('role'), m.get('role'))}: {_one_line(m.get('content'), limit=400)}"
+        for m in llm_messages[-40:]
+    ) or digest
+    system = (
+        "You are SkillBridge's memory compactor. Compress this mentor conversation "
+        "into a concise, bounded summary (max 6 sentences, max 400 words). Keep "
+        "it in the same dominant language as the conversation. Preserve: the "
+        "student's stated goals and skills, any commitments or next steps, and "
+        "the conversation topic. This is non-authoritative context only — never "
+        "state anything as a verified fact about the student."
+    )
+    user = (
+        "Conversation so far (deterministic topic digest first):\n"
+        f"{digest}\n\n"
+        "Recent exchange:\n"
+        f"{transcript}\n\n"
+        "Compressed summary:"
+    )
+    try:
+        text = genai._call_artifact(system, user, max_tokens=700)
+    except Exception:
+        return ""
+    text = re.sub(r"\s+", " ", str(text or "")).strip().lstrip(":;—")
+    if len(text) < 20:
+        return ""
+    if len(text) > SUMMARY_CHAR_CAP:
+        text = text[:SUMMARY_CHAR_CAP].rstrip() + "…"
+    return text
+
+
 def after_turn(student_id, tutor_id, conversation_id=None):
     """Fold any messages that just dropped out of the recent window.
 
@@ -264,6 +318,37 @@ def after_turn(student_id, tutor_id, conversation_id=None):
     _write_memory(student_id, tutor_id, combined, to_fold[-1]["id"], conversation_id=conversation_id)
     if conversation_id is not None:
         _write_memory(student_id, tutor_id, combined, to_fold[-1]["id"])
+    if genai.artifact_model_enabled():
+        def _enrich_background():
+            enriched = ""
+            try:
+                enriched = _enrich_digest_with_artifact(to_fold, previous)
+            except Exception:
+                enriched = ""
+            if not enriched:
+                return
+            with get_cursor() as c:
+                if conversation_id is not None:
+                    row = c.execute(
+                        """
+                        SELECT last_compacted_id FROM tutor_conversation_memory_threads
+                        WHERE conversation_id=? AND student_id=? AND tutor_id=?
+                        """,
+                        (conversation_id, student_id, tutor_id),
+                    ).fetchone()
+                else:
+                    row = c.execute(
+                        "SELECT last_compacted_id FROM tutor_conversation_memory "
+                        "WHERE student_id=? AND tutor_id=?",
+                        (student_id, tutor_id),
+                    ).fetchone()
+            watermark = row["last_compacted_id"] if row else 0
+            if watermark == to_fold[-1]["id"]:
+                _write_memory(student_id, tutor_id, enriched, to_fold[-1]["id"],
+                              conversation_id=conversation_id)
+                if conversation_id is not None:
+                    _write_memory(student_id, tutor_id, enriched, to_fold[-1]["id"])
+        threading.Thread(target=_enrich_background, daemon=True).start()
     return combined
 
 

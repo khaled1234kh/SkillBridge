@@ -171,3 +171,41 @@ def test_cv_upload_keeps_skills_when_none_recognized(client, student_id, auth_he
     assert data["warning"]
     # the recognizable-CV profile is left untouched
     assert {s["name"] for s in models.get_student(student_id)["self_reported_skills"]} == before
+
+
+def test_cv_extraction_bounds_provider_timelimit_and_retries(monkeypatch):
+    """The extraction provider call must be latency-bounded (one short attempt,
+    no retries) so a throttled NIM can never hold the upload for the full NIM
+    budget; the deterministic fallback then wins instead."""
+    captured = {}
+
+    def fake_complete(system, user, fallback=None, **kwargs):
+        captured["user"] = user
+        captured["kwargs"] = kwargs
+        return fallback
+
+    monkeypatch.setattr(genai, "complete", fake_complete)
+    result = genai.extract_skills_from_cv(FIXTURE_CV)
+    assert captured["kwargs"]["timeout"] == genai._CV_TIMEOUT_SECONDS
+    assert captured["kwargs"]["retries"] == genai._CV_RETRIES
+    assert result  # deterministic fallback still produces skills
+
+
+def test_cv_extraction_truncates_oversized_input(monkeypatch):
+    """Huge CV text must be truncated before being inlined into the model prompt
+    (deterministic extraction still sees the full text)."""
+    captured = {}
+    huge = FIXTURE_CV * 5000  # ~1MB total
+
+    def fake_complete(system, user, fallback=None, **kwargs):
+        captured["user"] = user
+        captured["cv_len"] = len(huge)
+        return fallback
+
+    monkeypatch.setattr(genai, "complete", fake_complete)
+    genai.extract_skills_from_cv(huge)
+    # the full CV reaches extract_skills_from_cv, but the inlined model prompt
+    # is capped at _CV_TEXT_LIMIT.
+    assert captured["cv_len"] == len(huge)
+    tail = captured["user"].split("CV text:\n\n", 1)[1] if "CV text:" in captured["user"] else ""
+    assert len(tail) == genai._CV_TEXT_LIMIT
